@@ -1,19 +1,17 @@
 const CACHE_NAME = 'home-warehouse-v4';
 const urlsToCache = [
-  '/',
-  '/index.html',
-  '/app.js',
-  '/manifest.json',
-  'https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js',
-  'https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js',
-  '/icons/icon-72.png',
-  '/icons/icon-96.png',
-  '/icons/icon-128.png',
-  '/icons/icon-144.png',
-  '/icons/icon-152.png',
-  '/icons/icon-192.png',
-  '/icons/icon-384.png',
-  '/icons/icon-512.png'
+  './',
+  './index.html',
+  './app.js',
+  './manifest.json',
+  './icons/icon-72.png',
+  './icons/icon-96.png',
+  './icons/icon-128.png',
+  './icons/icon-144.png',
+  './icons/icon-152.png',
+  './icons/icon-192.png',
+  './icons/icon-384.png',
+  './icons/icon-512.png'
 ];
 
 self.addEventListener('install', (event) => {
@@ -37,7 +35,10 @@ self.addEventListener('fetch', (event) => {
     caches.match(event.request).then((response) => {
       if (response) return response;
       return fetch(event.request).catch(() => {
-        if (event.request.mode === 'navigate') return caches.match('/index.html');
+        // 離線時如果請求的是頁面，返回 index.html
+        if (event.request.mode === 'navigate' || event.request.destination === 'document') {
+          return caches.match('./index.html');
+        }
       });
     })
   );

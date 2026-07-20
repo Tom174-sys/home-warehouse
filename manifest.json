@@ -2,10 +2,10 @@
   "name": "家倉 - 家庭物品管理",
   "short_name": "家倉",
   "description": "家庭物品管理倉庫，全家人一起管理家中物品",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
-  "background_color": "#f8f9fa",
-  "theme_color": "#2c3e50",
+  "background_color": "#F5F0E8",
+  "theme_color": "#F5F0E8",
   "orientation": "portrait",
   "icons": [
     { "src": "icons/icon-72.png", "sizes": "72x72", "type": "image/png", "purpose": "any maskable" },

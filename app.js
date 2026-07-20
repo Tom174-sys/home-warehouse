@@ -68,23 +68,37 @@ function initFirebase() {
     firebase.initializeApp(firebaseConfig);
     db = firebase.database();
 
-    // 使用家庭名稱+密碼的雜湊作為資料庫路徑
     const path = 'families/' + hashFamily(currentFamily, currentPassword);
     familyRef = db.ref(path);
 
-    // 監聽資料變化（即時同步）
+    // 先嘗試從 localStorage 載入資料（避免空白閃爍）
+    loadFromLocal();
+
+    // 監聽資料變化（即時同步）- 只更新，不覆蓋本地已有資料
     familyRef.on('value', (snapshot) => {
       const data = snapshot.val();
       if (data) {
-        if (data.categories) categories = data.categories;
-        else categories = JSON.parse(JSON.stringify(defaultCategories));
-        if (data.items) items = data.items;
-        else items = [];
+        // 只有當遠端資料較新時才更新
+        const remoteTime = data.lastUpdate || 0;
+        const localTime = parseInt(localStorage.getItem('hw_lastUpdate') || '0');
+
+        if (remoteTime >= localTime) {
+          if (data.categories) categories = data.categories;
+          else categories = JSON.parse(JSON.stringify(defaultCategories));
+          if (data.items) items = data.items;
+          else items = [];
+
+          // 更新本地備份
+          saveToLocal();
+        }
       } else {
-        // 新家庭，建立預設資料
-        categories = JSON.parse(JSON.stringify(defaultCategories));
-        items = getDefaultItems();
-        saveToCloud();
+        // 新家庭，檢查本地是否有資料
+        const localItems = localStorage.getItem('hw_items_v3');
+        if (!localItems || JSON.parse(localItems).length === 0) {
+          categories = JSON.parse(JSON.stringify(defaultCategories));
+          items = getDefaultItems();
+          saveToCloud();
+        }
       }
 
       renderCategoryTabs();
@@ -103,7 +117,6 @@ function initFirebase() {
 
   } catch(e) {
     console.error('Firebase init error:', e);
-    // 離線模式
     loadFromLocal();
     updateSyncStatus('offline');
   }
@@ -168,8 +181,12 @@ function doLogout() {
 
 // ========== 資料同步 ==========
 function saveToCloud() {
+  const now = Date.now();
+  localStorage.setItem('hw_lastUpdate', now.toString());
+  saveToLocal();
+
   if (!familyRef || !isOnline) {
-    saveToLocal();
+    updateSyncStatus('offline');
     return;
   }
 
@@ -178,23 +195,23 @@ function saveToCloud() {
   familyRef.set({
     categories: categories,
     items: items,
-    lastUpdate: Date.now()
+    lastUpdate: now
   }).then(() => {
     updateSyncStatus('online');
-  }).catch(() => {
+  }).catch((err) => {
+    console.error('Sync error:', err);
     updateSyncStatus('offline');
-    saveToLocal();
   });
 }
 
 function saveToLocal() {
-  localStorage.setItem('hw_categories', JSON.stringify(categories));
-  localStorage.setItem('hw_items', JSON.stringify(items));
+  localStorage.setItem('hw_categories_v3', JSON.stringify(categories));
+  localStorage.setItem('hw_items_v3', JSON.stringify(items));
 }
 
 function loadFromLocal() {
-  const catSaved = localStorage.getItem('hw_categories');
-  const itemSaved = localStorage.getItem('hw_items');
+  const catSaved = localStorage.getItem('hw_categories_v3');
+  const itemSaved = localStorage.getItem('hw_items_v3');
   if (catSaved) { try { categories = JSON.parse(catSaved); } catch(e) {} }
   if (itemSaved) { try { items = JSON.parse(itemSaved); } catch(e) {} }
 
@@ -245,7 +262,18 @@ function getDefaultItems() {
 }
 
 function formatDate(date) {
-  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+  // 使用香港時區 (Asia/Hong_Kong)
+  const options = { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit' };
+  const parts = new Intl.DateTimeFormat('zh-HK', options).formatToParts(date);
+  const year = parts.find(p => p.type === 'year').value;
+  const month = parts.find(p => p.type === 'month').value;
+  const day = parts.find(p => p.type === 'day').value;
+  return `${year}-${month}-${day}`;
+}
+
+function getTodayHK() {
+  const now = new Date();
+  return formatDate(now);
 }
 
 function getDaysUntilExpiry(expiryDate) {
@@ -288,14 +316,54 @@ function showToast(msg) {
 function handleImageUpload(event) {
   const file = event.target.files[0];
   if (!file) return;
-  if (file.size > 2 * 1024 * 1024) { alert('圖片太大，請選擇 2MB 以下的圖片'); return; }
 
+  // 顯示壓縮中提示
+  const area = document.getElementById('imgUploadArea');
+  area.innerHTML = '<span class="img-upload-icon">🔄</span><span class="img-upload-text">正在壓縮圖片...</span>';
+
+  // 先讀取圖片
   const reader = new FileReader();
   reader.onload = (e) => {
-    currentImageData = e.target.result;
-    const area = document.getElementById('imgUploadArea');
-    area.classList.add('has-img');
-    area.innerHTML = `<img src="${currentImageData}" alt="預覽"><button class="img-remove" onclick="event.stopPropagation();removeImage()">×</button>`;
+    const img = new Image();
+    img.onload = () => {
+      // 壓縮設定：最大寬度 800px，品質 0.7
+      const maxWidth = 800;
+      const maxHeight = 800;
+      const quality = 0.7;
+
+      let width = img.width;
+      let height = img.height;
+
+      // 等比例縮放
+      if (width > maxWidth || height > maxHeight) {
+        const ratio = Math.min(maxWidth / width, maxHeight / height);
+        width = Math.floor(width * ratio);
+        height = Math.floor(height * ratio);
+      }
+
+      // 建立 canvas 壓縮
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#f0f0f5';
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // 轉為壓縮後的 base64
+      const compressedData = canvas.toDataURL('image/jpeg', quality);
+
+      // 計算壓縮前後大小
+      const originalSize = Math.round(e.target.result.length / 1024);
+      const compressedSize = Math.round(compressedData.length / 1024);
+
+      currentImageData = compressedData;
+      area.classList.add('has-img');
+      area.innerHTML = `<img src="${currentImageData}" alt="預覽"><button class="img-remove" onclick="event.stopPropagation();removeImage()">×</button>`;
+
+      showToast(`圖片已壓縮 ${originalSize}KB → ${compressedSize}KB`);
+    };
+    img.src = e.target.result;
   };
   reader.readAsDataURL(file);
 }
@@ -525,7 +593,7 @@ function openAddModal() {
   document.getElementById('itemQty').value = '1';
   document.getElementById('itemUnit').value = '';
   document.getElementById('itemLocation').value = '';
-  document.getElementById('itemBuyDate').value = formatDate(new Date());
+  document.getElementById('itemBuyDate').value = getTodayHK();
   document.getElementById('itemExpiry').value = '';
   document.getElementById('itemNote').value = '';
   removeImage();
@@ -576,7 +644,7 @@ function saveItem() {
     expiry: document.getElementById('itemExpiry').value,
     note: document.getElementById('itemNote').value.trim(),
     image: currentImageData || (editingId ? items.find(i => i.id === editingId)?.image || '' : ''),
-    added: editingId ? (items.find(i => i.id === editingId)?.added || formatDate(new Date())) : formatDate(new Date())
+    added: editingId ? (items.find(i => i.id === editingId)?.added || getTodayHK()) : getTodayHK()
   };
 
   if (editingId) {
@@ -679,6 +747,7 @@ function editItem() {
   document.getElementById('itemNote').value = item.note;
 
   if (item.image) {
+    currentImageData = item.image;
     const area = document.getElementById('imgUploadArea');
     area.classList.add('has-img');
     area.innerHTML = `<img src="${item.image}" alt="預覽"><button class="img-remove" onclick="event.stopPropagation();removeImage()">×</button>`;
