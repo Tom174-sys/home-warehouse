@@ -3,6 +3,7 @@
 
 let items = [];
 let outHistory = [];
+let actionHistory = [];  // 操作歷史：入倉、出倉、編輯、刪除、數量變更
 let categories = {};
 let currentFilter = 'all';
 let editingId = null;
@@ -100,6 +101,7 @@ function initFirebase() {
           categories = JSON.parse(JSON.stringify(defaultCategories));
           items = getDefaultItems();
           outHistory = [];
+          actionHistory = [];
           saveToCloud();
         }
       }
@@ -197,6 +199,7 @@ function saveToCloud() {
     categories: categories,
     items: items,
     outHistory: outHistory,
+    actionHistory: actionHistory,
     lastUpdate: now
   }).then(() => {
     updateSyncStatus('online');
@@ -210,15 +213,18 @@ function saveToLocal() {
   localStorage.setItem('hw_categories_v3', JSON.stringify(categories));
   localStorage.setItem('hw_items_v3', JSON.stringify(items));
   localStorage.setItem('hw_outHistory_v3', JSON.stringify(outHistory));
+  localStorage.setItem('hw_actionHistory_v3', JSON.stringify(actionHistory));
 }
 
 function loadFromLocal() {
   const catSaved = localStorage.getItem('hw_categories_v3');
   const itemSaved = localStorage.getItem('hw_items_v3');
   const histSaved = localStorage.getItem('hw_outHistory_v3');
+  const actionSaved = localStorage.getItem('hw_actionHistory_v3');
   if (catSaved) { try { categories = JSON.parse(catSaved); } catch(e) {} }
   if (itemSaved) { try { items = JSON.parse(itemSaved); } catch(e) {} }
   if (histSaved) { try { outHistory = JSON.parse(histSaved); } catch(e) {} }
+  if (actionSaved) { try { actionHistory = JSON.parse(actionSaved); } catch(e) {} }
 
   renderCategoryTabs();
   renderCategorySelects();
@@ -258,11 +264,11 @@ function getDefaultItems() {
   const twoDaysAgo = new Date(today); twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
 
   return [
-    { id: 1, name: '全脂牛奶', category: 'food', qty: 2, unit: '瓶', location: '冰箱', buyDate: formatDate(twoDaysAgo), expiry: formatDate(nextWeek), note: '7-11 購入', image: '', added: formatDate(twoDaysAgo) },
-    { id: 2, name: '感冒藥', category: 'medicine', qty: 1, unit: '盒', location: '櫥櫃', buyDate: formatDate(yesterday), expiry: formatDate(nextMonth), note: '上次感冒剩的', image: '', added: formatDate(yesterday) },
-    { id: 3, name: '無線耳機', category: 'electronics', qty: 1, unit: '個', location: '抽屜', buyDate: '', expiry: '', note: 'AirPods Pro 2', image: '', added: formatDate(today) },
-    { id: 4, name: 'T恤', category: 'clothes', qty: 3, unit: '件', location: '衣櫃', buyDate: formatDate(yesterday), expiry: '', note: 'Uniqlo 白色', image: '', added: formatDate(yesterday) },
-    { id: 5, name: '醬油', category: 'food', qty: 1, unit: '瓶', location: '櫥櫃', buyDate: formatDate(twoDaysAgo), expiry: formatDate(nextMonth), note: '龜甲萬', image: '', added: formatDate(twoDaysAgo) }
+    { id: 1, name: '全脂牛奶', category: 'food', qty: 2, unit: '瓶', price: 24.5, location: '冰箱', buyDate: formatDate(twoDaysAgo), expiry: formatDate(nextWeek), note: '7-11 購入', image: '', added: formatDate(twoDaysAgo) },
+    { id: 2, name: '感冒藥', category: 'medicine', qty: 1, unit: '盒', price: 68.0, location: '櫥櫃', buyDate: formatDate(yesterday), expiry: formatDate(nextMonth), note: '上次感冒剩的', image: '', added: formatDate(yesterday) },
+    { id: 3, name: '無線耳機', category: 'electronics', qty: 1, unit: '個', price: 1899.0, location: '抽屜', buyDate: '', expiry: '', note: 'AirPods Pro 2', image: '', added: formatDate(today) },
+    { id: 4, name: 'T恤', category: 'clothes', qty: 3, unit: '件', price: 99.0, location: '衣櫃', buyDate: formatDate(yesterday), expiry: '', note: 'Uniqlo 白色', image: '', added: formatDate(yesterday) },
+    { id: 5, name: '醬油', category: 'food', qty: 1, unit: '瓶', price: 32.0, location: '櫥櫃', buyDate: formatDate(twoDaysAgo), expiry: formatDate(nextMonth), note: '龜甲萬', image: '', added: formatDate(twoDaysAgo) }
   ];
 }
 
@@ -532,7 +538,11 @@ function batchOut() {
 
   if (outHistory.length > 200) outHistory = outHistory.slice(0, 200);
 
+  const batchItems = items.filter(i => selectedItems.has(i.id));
   items = items.filter(i => !selectedItems.has(i.id));
+  batchItems.forEach(item => {
+    addActionHistory('out', item, '批量出倉（共 ' + count + ' 件）');
+  });
   selectedItems.clear();
   saveToCloud();
   renderItems();
@@ -605,6 +615,7 @@ function renderItems(searchTerm) {
         '<div class="item-meta">' +
           '<span>📍 ' + escapeHtml(item.location) + '</span>' +
           '<span>📦 ' + item.qty + escapeHtml(item.unit) + '</span>' +
+          (item.price && item.price > 0 ? '<span>💰 $' + item.price.toFixed(2) + '</span>' : '') +
           buyInfo +
           getExpiryBadge(days) +
         '</div>' +
@@ -638,7 +649,9 @@ function adjustQty(id, delta) {
     return;
   }
 
+  const oldQty = item.qty;
   item.qty = newQty;
+  addActionHistory('qty_change', item, '數量從 ' + oldQty + ' 變更為 ' + newQty);
   saveToCloud();
   renderItems(document.getElementById('searchInput').value);
   updateStats();
@@ -678,6 +691,7 @@ function openAddModal() {
   document.getElementById('itemName').value = '';
   document.getElementById('itemQty').value = '1';
   document.getElementById('itemUnit').value = '';
+  document.getElementById('itemPrice').value = '';
   document.getElementById('itemLocation').value = '';
   document.getElementById('itemBuyDate').value = getTodayHK();
   document.getElementById('itemExpiry').value = '';
@@ -721,12 +735,14 @@ function saveItem() {
 
   const existingItem = editingId ? items.find(i => i.id === editingId) : null;
 
+  const priceVal = document.getElementById('itemPrice').value.trim();
   const item = {
     id: editingId || Date.now(),
     name: name,
     category: selectedCategory,
     qty: parseInt(document.getElementById('itemQty').value) || 1,
     unit: document.getElementById('itemUnit').value.trim() || '個',
+    price: priceVal ? parseFloat(priceVal) : null,
     location: document.getElementById('itemLocation').value.trim() || '未指定',
     buyDate: document.getElementById('itemBuyDate').value,
     expiry: document.getElementById('itemExpiry').value,
@@ -747,7 +763,14 @@ function saveItem() {
   renderItems();
   updateStats();
   checkExpiringItems();
-  showToast(editingId ? '物品已更新' : '物品已入倉');
+
+  if (editingId) {
+    addActionHistory('edit', item, '編輯物品資訊');
+    showToast('物品已更新');
+  } else {
+    addActionHistory('in', item, '新增物品入倉');
+    showToast('物品已入倉');
+  }
 }
 
 // ========== 詳情 ==========
@@ -777,6 +800,20 @@ function openDetail(id) {
 
   document.getElementById('detailName').textContent = item.name;
   document.getElementById('detailQty').textContent = '數量：' + item.qty + ' ' + item.unit;
+
+  const priceEl = document.getElementById('detailPrice');
+  const priceRow = document.getElementById('detailPriceRow');
+  const priceValue = document.getElementById('detailPriceValue');
+  if (item.price && item.price > 0) {
+    priceEl.textContent = '💰 HK$ ' + item.price.toFixed(2);
+    priceEl.style.display = 'block';
+    priceRow.style.display = 'flex';
+    priceValue.textContent = 'HK$ ' + item.price.toFixed(2);
+  } else {
+    priceEl.style.display = 'none';
+    priceRow.style.display = 'none';
+  }
+
   document.getElementById('detailLocation').textContent = item.location;
 
   const buyRow = document.getElementById('detailBuyDateRow');
@@ -831,6 +868,7 @@ function editItem() {
   document.getElementById('itemName').value = item.name;
   document.getElementById('itemQty').value = item.qty;
   document.getElementById('itemUnit').value = item.unit;
+  document.getElementById('itemPrice').value = item.price || '';
   document.getElementById('itemLocation').value = item.location;
   document.getElementById('itemBuyDate').value = item.buyDate;
   document.getElementById('itemExpiry').value = item.expiry;
@@ -857,8 +895,12 @@ function editItem() {
 
 function deleteItem() {
   if (!detailItemId) return;
+  const item = items.find(i => i.id === detailItemId);
   if (!confirm('確定要刪除這件物品嗎？')) return;
   items = items.filter(i => i.id !== detailItemId);
+  if (item) {
+    addActionHistory('delete', item, '直接刪除物品（非出倉）');
+  }
   saveToCloud();
   closeDetailModal();
   renderItems();
@@ -910,7 +952,12 @@ function doOut() {
   renderItems();
   updateStats();
   checkExpiringItems();
-  showToast(item ? '「' + item.name + '」已出倉' : '已出倉');
+  if (item) {
+    addActionHistory('out', item, '物品出倉');
+    showToast('「' + item.name + '」已出倉');
+  } else {
+    showToast('已出倉');
+  }
 }
 
 // ========== 出倉歷史 ==========
@@ -952,6 +999,7 @@ function restoreItem(outId) {
   items.push(restored);
   outHistory = outHistory.filter(h => h.outId != outId);
 
+  addActionHistory('restore', restored, '從出倉歷史恢復入倉');
   saveToCloud();
   renderOutHistory();
   renderItems();
@@ -966,6 +1014,281 @@ function clearHistory() {
   renderOutHistory();
   showToast('出倉歷史已清空');
 }
+
+// ========== 操作歷史記錄 ==========
+function addActionHistory(type, itemData, details) {
+  const action = {
+    id: 'act_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+    type: type,           // 'in' 入倉, 'out' 出倉, 'edit' 編輯, 'delete' 刪除, 'qty_change' 數量變更
+    itemName: itemData.name || '',
+    itemCategory: itemData.category || 'other',
+    itemQty: itemData.qty || 0,
+    itemUnit: itemData.unit || '個',
+    itemLocation: itemData.location || '',
+    timestamp: Date.now(),
+    date: getTodayHK(),
+    time: new Date().toLocaleTimeString('zh-HK', { hour: '2-digit', minute: '2-digit' }),
+    details: details || ''
+  };
+
+  actionHistory.unshift(action);
+  // 保留最近 500 條記錄
+  if (actionHistory.length > 500) {
+    actionHistory = actionHistory.slice(0, 500);
+  }
+  saveToCloud();
+}
+
+function getActionIcon(type) {
+  const icons = {
+    'in': '📥',
+    'out': '📤',
+    'edit': '✏️',
+    'delete': '🗑️',
+    'qty_change': '🔢',
+    'restore': '↩️'
+  };
+  return icons[type] || '📝';
+}
+
+function getActionLabel(type) {
+  const labels = {
+    'in': '入倉',
+    'out': '出倉',
+    'edit': '編輯',
+    'delete': '刪除',
+    'qty_change': '數量變更',
+    'restore': '恢復入倉'
+  };
+  return labels[type] || '操作';
+}
+
+function getActionColor(type) {
+  const colors = {
+    'in': '#5A9E6E',
+    'out': '#D4574A',
+    'edit': '#D4A03A',
+    'delete': '#8A8580',
+    'qty_change': '#3498db',
+    'restore': '#5A9E6E'
+  };
+  return colors[type] || '#95a5a6';
+}
+
+
+// ========== 操作歷史彈窗 ==========
+function openActionHistoryModal() {
+  renderActionHistory();
+  document.getElementById('actionHistoryModal').classList.add('show');
+}
+
+function closeActionHistoryModal() {
+  document.getElementById('actionHistoryModal').classList.remove('show');
+}
+
+function renderActionHistory() {
+  const list = document.getElementById('actionHistoryList');
+  const empty = document.getElementById('actionHistoryEmpty');
+  const filter = document.getElementById('actionHistoryFilter').value;
+
+  let filtered = actionHistory;
+  if (filter !== 'all') {
+    filtered = actionHistory.filter(a => a.type === filter);
+  }
+
+  if (filtered.length === 0) {
+    list.innerHTML = '';
+    empty.style.display = 'block';
+    document.getElementById('actionHistoryCount').textContent = '0 條記錄';
+    return;
+  }
+
+  empty.style.display = 'none';
+  document.getElementById('actionHistoryCount').textContent = filtered.length + ' 條記錄';
+
+  list.innerHTML = filtered.map(a => {
+    const cfg = categories[a.itemCategory] || categories.other;
+    const color = getActionColor(a.type);
+    return '<div class="action-history-item" style="border-left:4px solid ' + color + '">' +
+      '<div class="action-history-icon" style="background:' + color + '20;color:' + color + '">' + getActionIcon(a.type) + '</div>' +
+      '<div class="action-history-info">' +
+        '<div class="action-history-header">' +
+          '<span class="action-history-name">' + escapeHtml(a.itemName) + '</span>' +
+          '<span class="action-history-type" style="background:' + color + '20;color:' + color + '">' + getActionLabel(a.type) + '</span>' +
+        '</div>' +
+        '<div class="action-history-meta">' +
+          '<span>' + cfg.icon + ' ' + cfg.label + '</span>' +
+          '<span>📦 ' + a.itemQty + escapeHtml(a.itemUnit) + '</span>' +
+          (a.itemPrice ? '<span>💰 $' + a.itemPrice.toFixed(2) + '</span>' : '') +
+          '<span>📍 ' + escapeHtml(a.itemLocation) + '</span>' +
+        '</div>' +
+        (a.details ? '<div class="action-history-detail">' + escapeHtml(a.details) + '</div>' : '') +
+        '<div class="action-history-time">' + a.date + ' ' + a.time + '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function filterActionHistory() {
+  renderActionHistory();
+}
+
+function clearActionHistory() {
+  if (!confirm('確定要清空所有操作歷史嗎？此操作無法復原。')) return;
+  actionHistory = [];
+  saveToCloud();
+  renderActionHistory();
+  showToast('操作歷史已清空');
+}
+
+// ========== 日曆模式 ==========
+let calendarCurrentDate = new Date();
+let calendarSelectedDate = null;
+
+function openCalendarModal() {
+  calendarCurrentDate = new Date();
+  renderCalendar();
+  document.getElementById('calendarModal').classList.add('show');
+}
+
+function closeCalendarModal() {
+  document.getElementById('calendarModal').classList.remove('show');
+  document.getElementById('calendarDayDetail').style.display = 'none';
+}
+
+function changeCalendarMonth(delta) {
+  calendarCurrentDate.setMonth(calendarCurrentDate.getMonth() + delta);
+  renderCalendar();
+}
+
+function renderCalendar() {
+  const year = calendarCurrentDate.getFullYear();
+  const month = calendarCurrentDate.getMonth();
+
+  // 更新月份標題
+  const monthNames = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+  document.getElementById('calendarMonthLabel').textContent = year + '年' + monthNames[month];
+
+  const grid = document.getElementById('calendarGrid');
+  grid.innerHTML = '';
+
+  // 計算日曆範圍
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const startDayOfWeek = firstDay.getDay(); // 0=Sunday
+  const daysInMonth = lastDay.getDate();
+
+  // 上個月的尾端日期
+  const prevMonthLastDay = new Date(year, month, 0).getDate();
+
+  const today = new Date();
+  const isCurrentMonth = today.getFullYear() === year && today.getMonth() === month;
+
+  // 收集當月所有 actionHistory 資料
+  const monthActions = {};
+  let monthIn = 0, monthOut = 0, monthChange = 0;
+
+  actionHistory.forEach(action => {
+    const actionDate = new Date(action.date);
+    if (actionDate.getFullYear() === year && actionDate.getMonth() === month) {
+      const day = actionDate.getDate();
+      if (!monthActions[day]) monthActions[day] = [];
+      monthActions[day].push(action);
+
+      if (action.type === 'in') monthIn++;
+      else if (action.type === 'out') monthOut++;
+      else if (action.type === 'qty_change') monthChange++;
+    }
+  });
+
+  // 更新統計
+  document.getElementById('calStatIn').textContent = monthIn;
+  document.getElementById('calStatOut').textContent = monthOut;
+  document.getElementById('calStatChange').textContent = monthChange;
+
+  // 填充上個月尾端
+  for (let i = startDayOfWeek - 1; i >= 0; i--) {
+    const day = prevMonthLastDay - i;
+    const cell = createCalendarCell(day, true);
+    grid.appendChild(cell);
+  }
+
+  // 填充當月
+  for (let day = 1; day <= daysInMonth; day++) {
+    const cell = createCalendarCell(day, false, monthActions[day], isCurrentMonth && day === today.getDate());
+    grid.appendChild(cell);
+  }
+
+  // 填充下個月開頭
+  const totalCells = startDayOfWeek + daysInMonth;
+  const remainingCells = 42 - totalCells; // 6行 x 7列
+  for (let day = 1; day <= remainingCells; day++) {
+    const cell = createCalendarCell(day, true);
+    grid.appendChild(cell);
+  }
+}
+
+function createCalendarCell(day, isOtherMonth, actions, isToday) {
+  const cell = document.createElement('div');
+  cell.className = 'calendar-day' + (isOtherMonth ? ' other-month' : '') + (isToday ? ' today' : '');
+
+  const number = document.createElement('div');
+  number.className = 'calendar-day-number';
+  number.textContent = day;
+  cell.appendChild(number);
+
+  if (actions && actions.length > 0) {
+    const dots = document.createElement('div');
+    dots.className = 'calendar-day-dots';
+
+    const hasIn = actions.some(a => a.type === 'in');
+    const hasOut = actions.some(a => a.type === 'out');
+    const hasQty = actions.some(a => a.type === 'qty_change');
+    const hasEdit = actions.some(a => a.type === 'edit');
+
+    if (hasIn) dots.innerHTML += '<span class="calendar-dot in"></span>';
+    if (hasOut) dots.innerHTML += '<span class="calendar-dot out"></span>';
+    if (hasQty) dots.innerHTML += '<span class="calendar-dot qty"></span>';
+    if (hasEdit && !hasIn && !hasOut && !hasQty) dots.innerHTML += '<span class="calendar-dot edit"></span>';
+
+    cell.appendChild(dots);
+
+    // 點擊顯示當天詳情
+    cell.onclick = function() {
+      showCalendarDayDetail(day, actions);
+    };
+  }
+
+  return cell;
+}
+
+function showCalendarDayDetail(day, actions) {
+  const detail = document.getElementById('calendarDayDetail');
+  const title = document.getElementById('calendarDayTitle');
+  const list = document.getElementById('calendarDayList');
+
+  const year = calendarCurrentDate.getFullYear();
+  const month = calendarCurrentDate.getMonth() + 1;
+  title.textContent = year + '年' + month + '月' + day + '日 變動記錄 (' + actions.length + ' 筆)';
+
+  list.innerHTML = actions.map(a => {
+    const cfg = categories[a.itemCategory] || categories.other;
+    const color = getActionColor(a.type);
+    return '<div class="calendar-day-detail-item" style="border-left:3px solid ' + color + '">' +
+      '<div class="calendar-day-detail-icon" style="background:' + color + '20;color:' + color + '">' + getActionIcon(a.type) + '</div>' +
+      '<div class="calendar-day-detail-info">' +
+        '<div class="calendar-day-detail-name">' + escapeHtml(a.itemName) + ' <span style="font-size:11px;color:var(--text-muted);font-weight:500;">' + getActionLabel(a.type) + '</span></div>' +
+        '<div class="calendar-day-detail-meta">' + cfg.icon + ' ' + cfg.label + ' · 📦 ' + a.itemQty + escapeHtml(a.itemUnit) + (a.itemPrice ? ' · 💰 $' + a.itemPrice.toFixed(2) : '') + ' · 📍 ' + escapeHtml(a.itemLocation) + '</div>' +
+        (a.details ? '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + escapeHtml(a.details) + '</div>' : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  detail.style.display = 'block';
+  detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+
 
 // ========== 數據導出/導入 ==========
 function exportData() {
@@ -1463,6 +1786,9 @@ function confirmBarcodeAdd(barcode, name, category, image, quantity) {
       document.getElementById('itemUnit').value = unitMatch[1];
     }
   }
+
+  // 嘗試從 Open Food Facts 獲取價格（目前資料庫不直接提供，留空讓用戶填寫）
+  document.getElementById('itemPrice').value = '';
 
   // 在備註中添加條碼資訊
   const noteEl = document.getElementById('itemNote');

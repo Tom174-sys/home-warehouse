@@ -379,6 +379,168 @@
       transform: scale(0.95);
     }
 
+  
+    /* ========== 操作歷史樣式 ========== */
+    .action-history-item {
+      display: flex;
+      gap: 14px;
+      padding: 14px;
+      background: var(--bg-warm);
+      border-radius: var(--radius-md);
+      border: 1.5px solid var(--border);
+      transition: all 0.2s;
+      margin-bottom: 10px;
+    }
+    .action-history-item:hover {
+      background: var(--bg-card);
+      box-shadow: var(--shadow-sm);
+    }
+    .action-history-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+      font-weight: 700;
+    }
+    .action-history-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .action-history-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      gap: 8px;
+    }
+    .action-history-name {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .action-history-type {
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 10px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .action-history-meta {
+      font-size: 12px;
+      color: var(--text-secondary);
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+    .action-history-detail {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      font-style: italic;
+    }
+    .action-history-time {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      font-weight: 500;
+    }
+
+
+    /* ========== 日曆模式樣式 ========== */
+    .calendar-day {
+      aspect-ratio: 1;
+      border-radius: 10px;
+      background: var(--bg-warm);
+      border: 1.5px solid transparent;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 4px 2px;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+      min-height: 52px;
+    }
+    .calendar-day:hover {
+      background: var(--accent-soft);
+      border-color: var(--accent-light);
+      transform: scale(1.05);
+    }
+    .calendar-day.today {
+      background: linear-gradient(135deg, var(--accent-soft) 0%, #fff 100%);
+      border-color: var(--accent);
+      font-weight: 700;
+    }
+    .calendar-day.other-month {
+      opacity: 0.35;
+    }
+    .calendar-day-number {
+      font-size: 13px;
+      color: var(--text-primary);
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .calendar-day-dots {
+      display: flex;
+      gap: 3px;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      margin-top: auto;
+      padding-bottom: 2px;
+    }
+    .calendar-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .calendar-dot.in { background: var(--success); }
+    .calendar-dot.out { background: var(--danger); }
+    .calendar-dot.qty { background: var(--warning); }
+    .calendar-dot.edit { background: var(--text-muted); }
+    .calendar-day-detail-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      background: var(--bg-warm);
+      border-radius: var(--radius-sm);
+      border: 1.5px solid var(--border);
+    }
+    .calendar-day-detail-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    .calendar-day-detail-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .calendar-day-detail-name {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+    .calendar-day-detail-meta {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
   </style>
 </head>
 <body>
@@ -492,13 +654,17 @@
 
       <div class="form-group">
         <div class="form-row">
-          <div>
+          <div style="flex:1">
             <label class="form-label">數量</label>
             <input id="itemQty" class="form-input" type="number" value="1" min="1">
           </div>
-          <div>
+          <div style="flex:1.2">
             <label class="form-label">單位</label>
             <input id="itemUnit" class="form-input" type="text" placeholder="個/盒/瓶...">
+          </div>
+          <div style="flex:1.2">
+            <label class="form-label">價格 (HK$)</label>
+            <input id="itemPrice" class="form-input" type="number" placeholder="0.00" min="0" step="0.01">
           </div>
         </div>
       </div>
@@ -552,6 +718,7 @@
         </div>
         <h3 id="detailName" class="detail-name"></h3>
         <div id="detailQty" class="detail-qty"></div>
+      <div id="detailPrice" style="font-size:15px;color:var(--warning);font-weight:700;margin-bottom:20px;display:none;"></div>
 
         <div class="detail-info-box">
           <div class="detail-info-row">
@@ -559,6 +726,13 @@
             <div>
               <div class="detail-info-label">存放位置</div>
               <div id="detailLocation" class="detail-info-value"></div>
+            </div>
+          </div>
+          <div id="detailPriceRow" class="detail-info-row" style="display:none;">
+            <span class="detail-info-icon">💰</span>
+            <div>
+              <div class="detail-info-label">價格</div>
+              <div id="detailPriceValue" class="detail-info-value"></div>
             </div>
           </div>
           <div id="detailBuyDateRow" class="detail-info-row">
@@ -617,6 +791,98 @@
     </div>
   </div>
 
+
+  <!-- 操作歷史彈窗 -->
+  <div id="actionHistoryModal" class="history-overlay" onclick="if(event.target===this)closeActionHistoryModal()">
+    <div class="history-content" style="max-height:92vh;">
+      <div class="history-header">
+        <h3 class="history-title">📋 操作歷史記錄</h3>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="actionHistoryFilter" class="form-input" style="width:auto;padding:8px 12px;font-size:13px;min-width:100px;" onchange="filterActionHistory()">
+            <option value="all">全部操作</option>
+            <option value="in">📥 入倉</option>
+            <option value="out">📤 出倉</option>
+            <option value="edit">✏️ 編輯</option>
+            <option value="delete">🗑️ 刪除</option>
+            <option value="qty_change">🔢 數量變更</option>
+            <option value="restore">↩️ 恢復入倉</option>
+          </select>
+          <button class="settings-btn" onclick="clearActionHistory()">🗑️ 清空</button>
+          <button class="modal-close" onclick="closeActionHistoryModal()">×</button>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:0 4px;">
+        <span id="actionHistoryCount" style="font-size:13px;color:var(--text-secondary);font-weight:500;">0 條記錄</span>
+      </div>
+      <div id="actionHistoryList" class="history-list"></div>
+      <div id="actionHistoryEmpty" class="history-empty" style="display:none">
+        <div class="history-empty-icon">📋</div>
+        <div class="history-empty-text">暫無操作記錄</div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- 日曆模式彈窗 -->
+  <div id="calendarModal" class="history-overlay" onclick="if(event.target===this)closeCalendarModal()">
+    <div class="history-content" style="max-height:92vh;">
+      <div class="history-header">
+        <h3 class="history-title">📅 物品變動日曆</h3>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="settings-btn" onclick="changeCalendarMonth(-1)">◀</button>
+          <span id="calendarMonthLabel" style="font-size:15px;font-weight:700;color:var(--text-primary);min-width:100px;text-align:center;">2026年7月</span>
+          <button class="settings-btn" onclick="changeCalendarMonth(1)">▶</button>
+          <button class="settings-btn" onclick="closeCalendarModal()" style="margin-left:8px;">✕</button>
+        </div>
+      </div>
+
+      <!-- 圖例 -->
+      <div style="display:flex;gap:16px;justify-content:center;margin-bottom:14px;padding:8px;background:var(--bg-warm);border-radius:12px;">
+        <span style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--success);display:inline-block;"></span> 入倉</span>
+        <span style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--danger);display:inline-block;"></span> 出倉</span>
+        <span style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--warning);display:inline-block;"></span> 數量變更</span>
+      </div>
+
+      <!-- 星期標題 -->
+      <div id="calendarWeekdays" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px;text-align:center;">
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);padding:6px;">日</div>
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);padding:6px;">一</div>
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);padding:6px;">二</div>
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);padding:6px;">三</div>
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);padding:6px;">四</div>
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);padding:6px;">五</div>
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);padding:6px;">六</div>
+      </div>
+
+      <!-- 日曆格子 -->
+      <div id="calendarGrid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:16px;"></div>
+
+      <!-- 當天詳情 -->
+      <div id="calendarDayDetail" style="display:none;border-top:1.5px solid var(--border);padding-top:16px;">
+        <div style="font-size:15px;font-weight:700;color:var(--text-primary);margin-bottom:10px;" id="calendarDayTitle">7月21日 變動記錄</div>
+        <div id="calendarDayList" style="display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+
+      <!-- 底部統計 -->
+      <div style="position:sticky;bottom:0;background:linear-gradient(to top,#fff,transparent);padding-top:12px;">
+        <div style="display:flex;gap:16px;justify-content:center;background:var(--bg-warm);border-radius:12px;padding:12px 20px;border:1.5px solid var(--border);">
+          <div style="text-align:center;">
+            <div id="calStatIn" style="font-size:20px;font-weight:800;color:var(--success);">0</div>
+            <div style="font-size:11px;color:var(--text-secondary);">本月入倉</div>
+          </div>
+          <div style="text-align:center;">
+            <div id="calStatOut" style="font-size:20px;font-weight:800;color:var(--danger);">0</div>
+            <div style="font-size:11px;color:var(--text-secondary);">本月出倉</div>
+          </div>
+          <div style="text-align:center;">
+            <div id="calStatChange" style="font-size:20px;font-weight:800;color:var(--warning);">0</div>
+            <div style="font-size:11px;color:var(--text-secondary);">數量變更</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="catModal" class="cat-modal-overlay" onclick="if(event.target===this)closeCatModal()">
     <div class="cat-modal-card">
       <div class="cat-modal-title">➕ 新增分類</div>
@@ -657,6 +923,14 @@
       <div class="settings-row">
         <span class="settings-label">出倉歷史</span>
         <button class="settings-btn" onclick="closeSettings();openHistoryModal()">查看</button>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">操作歷史</span>
+        <button class="settings-btn" onclick="closeSettings();openActionHistoryModal()">查看</button>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">日曆模式</span>
+        <button class="settings-btn" onclick="closeSettings();openCalendarModal()">📅 查看</button>
       </div>
       <div class="settings-row">
         <span class="settings-label">數據備份</span>
