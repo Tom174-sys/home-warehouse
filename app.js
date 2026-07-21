@@ -1,5 +1,8 @@
-// 家倉 App v4 - 多人同步版 (Firebase Realtime Database)
+// 家倉 App v5 - 方案1 完整版 (Firebase Realtime Database)
+// 修復：出倉邏輯、新增：出倉歷史、批量操作、數量調整、數據導出導入
+
 let items = [];
+let outHistory = [];
 let categories = {};
 let currentFilter = 'all';
 let editingId = null;
@@ -11,6 +14,10 @@ let currentImageData = null;
 let outItemId = null;
 let selectedNewCatIcon = '📦';
 let selectedNewCatColor = '#95a5a6';
+
+// 批量操作相關
+let batchMode = false;
+let selectedItems = new Set();
 
 // Firebase 配置
 const firebaseConfig = {
@@ -28,7 +35,6 @@ let familyRef = null;
 let currentFamily = null;
 let currentPassword = null;
 let isOnline = true;
-let syncTimeout = null;
 
 const defaultCategories = {
   food: { icon: '🍎', color: '#ff6b6b', bg: '#fff0f0', label: '食品' },
@@ -44,7 +50,6 @@ const colorOptions = ['#e74c3c','#e67e22','#f1c40f','#2ecc71','#1abc9c','#3498db
 
 // ========== 初始化 ==========
 function init() {
-  // 檢查是否已登入
   const savedFamily = localStorage.getItem('hw_family');
   const savedPassword = localStorage.getItem('hw_password');
 
@@ -71,14 +76,11 @@ function initFirebase() {
     const path = 'families/' + hashFamily(currentFamily, currentPassword);
     familyRef = db.ref(path);
 
-    // 先嘗試從 localStorage 載入資料（避免空白閃爍）
     loadFromLocal();
 
-    // 監聽資料變化（即時同步）- 只更新，不覆蓋本地已有資料
     familyRef.on('value', (snapshot) => {
       const data = snapshot.val();
       if (data) {
-        // 只有當遠端資料較新時才更新
         const remoteTime = data.lastUpdate || 0;
         const localTime = parseInt(localStorage.getItem('hw_lastUpdate') || '0');
 
@@ -87,16 +89,17 @@ function initFirebase() {
           else categories = JSON.parse(JSON.stringify(defaultCategories));
           if (data.items) items = data.items;
           else items = [];
+          if (data.outHistory) outHistory = data.outHistory;
+          else outHistory = [];
 
-          // 更新本地備份
           saveToLocal();
         }
       } else {
-        // 新家庭，檢查本地是否有資料
         const localItems = localStorage.getItem('hw_items_v3');
         if (!localItems || JSON.parse(localItems).length === 0) {
           categories = JSON.parse(JSON.stringify(defaultCategories));
           items = getDefaultItems();
+          outHistory = [];
           saveToCloud();
         }
       }
@@ -109,7 +112,6 @@ function initFirebase() {
       updateSyncStatus('online');
     });
 
-    // 監聽連線狀態
     db.ref('.info/connected').on('value', (snap) => {
       isOnline = snap.val() === true;
       updateSyncStatus(isOnline ? 'online' : 'offline');
@@ -123,7 +125,6 @@ function initFirebase() {
 }
 
 function hashFamily(name, password) {
-  // 簡單的雜湊，實際使用時建議用更安全的方案
   let hash = 0;
   const str = name + '|' + password;
   for (let i = 0; i < str.length; i++) {
@@ -195,6 +196,7 @@ function saveToCloud() {
   familyRef.set({
     categories: categories,
     items: items,
+    outHistory: outHistory,
     lastUpdate: now
   }).then(() => {
     updateSyncStatus('online');
@@ -207,13 +209,16 @@ function saveToCloud() {
 function saveToLocal() {
   localStorage.setItem('hw_categories_v3', JSON.stringify(categories));
   localStorage.setItem('hw_items_v3', JSON.stringify(items));
+  localStorage.setItem('hw_outHistory_v3', JSON.stringify(outHistory));
 }
 
 function loadFromLocal() {
   const catSaved = localStorage.getItem('hw_categories_v3');
   const itemSaved = localStorage.getItem('hw_items_v3');
+  const histSaved = localStorage.getItem('hw_outHistory_v3');
   if (catSaved) { try { categories = JSON.parse(catSaved); } catch(e) {} }
   if (itemSaved) { try { items = JSON.parse(itemSaved); } catch(e) {} }
+  if (histSaved) { try { outHistory = JSON.parse(histSaved); } catch(e) {} }
 
   renderCategoryTabs();
   renderCategorySelects();
@@ -262,7 +267,6 @@ function getDefaultItems() {
 }
 
 function formatDate(date) {
-  // 使用香港時區 (Asia/Hong_Kong)
   const options = { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit' };
   const parts = new Intl.DateTimeFormat('zh-HK', options).formatToParts(date);
   const year = parts.find(p => p.type === 'year').value;
@@ -272,8 +276,7 @@ function formatDate(date) {
 }
 
 function getTodayHK() {
-  const now = new Date();
-  return formatDate(now);
+  return formatDate(new Date());
 }
 
 function getDaysUntilExpiry(expiryDate) {
@@ -317,16 +320,13 @@ function handleImageUpload(event) {
   const file = event.target.files[0];
   if (!file) return;
 
-  // 顯示壓縮中提示
   const area = document.getElementById('imgUploadArea');
   area.innerHTML = '<span class="img-upload-icon">🔄</span><span class="img-upload-text">正在壓縮圖片...</span>';
 
-  // 先讀取圖片
   const reader = new FileReader();
   reader.onload = (e) => {
     const img = new Image();
     img.onload = () => {
-      // 壓縮設定：最大寬度 800px，品質 0.7
       const maxWidth = 800;
       const maxHeight = 800;
       const quality = 0.7;
@@ -334,14 +334,12 @@ function handleImageUpload(event) {
       let width = img.width;
       let height = img.height;
 
-      // 等比例縮放
       if (width > maxWidth || height > maxHeight) {
         const ratio = Math.min(maxWidth / width, maxHeight / height);
         width = Math.floor(width * ratio);
         height = Math.floor(height * ratio);
       }
 
-      // 建立 canvas 壓縮
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
@@ -350,18 +348,15 @@ function handleImageUpload(event) {
       ctx.fillRect(0, 0, width, height);
       ctx.drawImage(img, 0, 0, width, height);
 
-      // 轉為壓縮後的 base64
       const compressedData = canvas.toDataURL('image/jpeg', quality);
-
-      // 計算壓縮前後大小
       const originalSize = Math.round(e.target.result.length / 1024);
       const compressedSize = Math.round(compressedData.length / 1024);
 
       currentImageData = compressedData;
       area.classList.add('has-img');
-      area.innerHTML = `<img src="${currentImageData}" alt="預覽"><button class="img-remove" onclick="event.stopPropagation();removeImage()">×</button>`;
+      area.innerHTML = '<img src="' + currentImageData + '" alt="預覽"><button class="img-remove" onclick="event.stopPropagation();removeImage()">×</button>';
 
-      showToast(`圖片已壓縮 ${originalSize}KB → ${compressedSize}KB`);
+      showToast('圖片已壓縮 ' + originalSize + 'KB → ' + compressedSize + 'KB');
     };
     img.src = e.target.result;
   };
@@ -379,15 +374,15 @@ function removeImage() {
 // ========== 分類渲染 ==========
 function renderCategoryTabs() {
   const scroll = document.getElementById('catScroll');
-  let html = `<button class="cat-btn ${currentFilter === 'all' ? 'active' : ''}" data-cat="all" onclick="filterCategory('all')">全部</button>`;
+  let html = '<button class="cat-btn ' + (currentFilter === 'all' ? 'active' : '') + '" data-cat="all" onclick="filterCategory(\'all\')">全部</button>';
 
   for (const [key, cfg] of Object.entries(categories)) {
     const isDefault = defaultCategories[key] !== undefined;
-    const delBtn = isDefault ? '' : `<span class="cat-delete" onclick="event.stopPropagation();deleteCategory('${key}')">×</span>`;
-    html += `<button class="cat-btn ${currentFilter === key ? 'active' : ''}" data-cat="${key}" onclick="filterCategory('${key}')">${cfg.icon} ${cfg.label}${delBtn}</button>`;
+    const delBtn = isDefault ? '' : '<span class="cat-delete" onclick="event.stopPropagation();deleteCategory(\'' + key + '\')">×</span>';
+    html += '<button class="cat-btn ' + (currentFilter === key ? 'active' : '') + '" data-cat="' + key + '" onclick="filterCategory(\'' + key + '\')">' + cfg.icon + ' ' + cfg.label + delBtn + '</button>';
   }
 
-  html += `<button class="cat-btn" style="background:rgba(255,255,255,0.15)" onclick="openCatModal()">➕ 新增</button>`;
+  html += '<button class="cat-btn" style="background:rgba(255,255,255,0.15)" onclick="openCatModal()">➕ 新增</button>';
   scroll.innerHTML = html;
 }
 
@@ -395,9 +390,9 @@ function renderCategorySelects() {
   const group = document.getElementById('catSelectGroup');
   let html = '';
   for (const [key, cfg] of Object.entries(categories)) {
-    html += `<button class="cat-select ${selectedCategory === key ? 'selected' : ''}" data-cat="${key}" onclick="setCategory('${key}')">${cfg.icon} ${cfg.label}</button>`;
+    html += '<button class="cat-select ' + (selectedCategory === key ? 'selected' : '') + '" data-cat="' + key + '" onclick="setCategory(\'' + key + '\')">' + cfg.icon + ' ' + cfg.label + '</button>';
   }
-  html += `<button class="add-cat-btn" onclick="openCatModal()">➕ 新增分類</button>`;
+  html += '<button class="add-cat-btn" onclick="openCatModal()">➕ 新增分類</button>';
   group.innerHTML = html;
 }
 
@@ -409,12 +404,12 @@ function openCatModal() {
 
   const iconPicker = document.getElementById('iconPicker');
   iconPicker.innerHTML = iconOptions.slice(0, 40).map(icon => 
-    `<button class="icon-option ${icon === selectedNewCatIcon ? 'selected' : ''}" onclick="selectNewCatIcon('${icon}')">${icon}</button>`
+    '<button class="icon-option ' + (icon === selectedNewCatIcon ? 'selected' : '') + '" onclick="selectNewCatIcon(\'' + icon + '\')">' + icon + '</button>'
   ).join('');
 
   const colorPicker = document.getElementById('colorPicker');
   colorPicker.innerHTML = colorOptions.map(color => 
-    `<button class="color-option ${color === selectedNewCatColor ? 'selected' : ''}" style="background:${color}" onclick="selectNewCatColor('${color}')"></button>`
+    '<button class="color-option ' + (color === selectedNewCatColor ? 'selected' : '') + '" style="background:' + color + '" onclick="selectNewCatColor(\'' + color + '\')"></button>'
   ).join('');
 
   document.getElementById('catModal').classList.add('show');
@@ -454,13 +449,13 @@ function saveNewCategory() {
   renderCategoryTabs();
   renderCategorySelects();
   closeCatModal();
-  showToast(`分類「${name}」已建立`);
+  showToast('分類「' + name + '」已建立');
 }
 
 function deleteCategory(key) {
   const cat = categories[key];
   if (!cat) return;
-  if (!confirm(`確定要刪除「${cat.label}」分類嗎？該分類下的物品將變為「其他」。`)) return;
+  if (!confirm('確定要刪除「' + cat.label + '」分類嗎？該分類下的物品將變為「其他」。')) return;
 
   items.forEach(item => {
     if (item.category === key) item.category = 'other';
@@ -474,11 +469,82 @@ function deleteCategory(key) {
   renderCategorySelects();
   renderItems();
   updateStats();
-  showToast(`分類「${cat.label}」已刪除`);
+  showToast('分類「' + cat.label + '」已刪除');
+}
+
+// ========== 批量操作 ==========
+function toggleBatchMode() {
+  batchMode = !batchMode;
+  selectedItems.clear();
+  const btn = document.getElementById('batchModeBtn');
+  const bar = document.getElementById('batchBar');
+
+  if (batchMode) {
+    btn.textContent = '❌';
+    btn.style.background = '#D4574A';
+    btn.style.color = 'white';
+    btn.style.borderColor = 'transparent';
+    bar.style.display = 'flex';
+  } else {
+    btn.textContent = '☑️';
+    btn.style.background = '';
+    btn.style.color = '';
+    btn.style.borderColor = '';
+    bar.style.display = 'none';
+  }
+
+  renderItems(document.getElementById('searchInput').value);
+}
+
+function toggleSelectItem(id, event) {
+  if (event) event.stopPropagation();
+  if (selectedItems.has(id)) {
+    selectedItems.delete(id);
+  } else {
+    selectedItems.add(id);
+  }
+  updateBatchBar();
+  renderItems(document.getElementById('searchInput').value);
+}
+
+function updateBatchBar() {
+  const count = selectedItems.size;
+  document.getElementById('batchCount').textContent = '已選 ' + count + ' 件';
+  document.getElementById('batchOutBtn').disabled = count === 0;
+}
+
+function batchOut() {
+  if (selectedItems.size === 0) return;
+  if (!confirm('確定要將選中的 ' + selectedItems.size + ' 件物品出倉嗎？')) return;
+
+  const now = getTodayHK();
+  const count = selectedItems.size;
+  selectedItems.forEach(id => {
+    const item = items.find(i => i.id === id);
+    if (item) {
+      outHistory.unshift({
+        ...item,
+        outDate: now,
+        outId: Date.now() + Math.random()
+      });
+    }
+  });
+
+  if (outHistory.length > 200) outHistory = outHistory.slice(0, 200);
+
+  items = items.filter(i => !selectedItems.has(i.id));
+  selectedItems.clear();
+  saveToCloud();
+  renderItems();
+  updateStats();
+  checkExpiringItems();
+  showToast('已將 ' + count + ' 件物品出倉');
+  toggleBatchMode();
 }
 
 // ========== 渲染列表 ==========
-function renderItems(searchTerm = '') {
+function renderItems(searchTerm) {
+  searchTerm = searchTerm || '';
   const list = document.getElementById('itemsList');
   const empty = document.getElementById('emptyState');
 
@@ -513,33 +579,42 @@ function renderItems(searchTerm = '') {
     const isExpiring = days !== null && days <= 7 && days >= 0;
     const isExpired = days !== null && days < 0;
     const isFresh = buyDays !== null && buyDays <= 3;
+    const isSelected = selectedItems.has(item.id);
 
-    let imgHtml = item.image ? `<img src="${item.image}" alt="${escapeHtml(item.name)}">` : `<span class="item-icon-fallback">${cfg.icon}</span>`;
+    let imgHtml = item.image ? '<img src="' + item.image + '" alt="' + escapeHtml(item.name) + '">' : '<span class="item-icon-fallback">' + cfg.icon + '</span>';
     let freshBadge = (isFresh && (item.category === 'food' || (categories[item.category] && categories[item.category].label.includes('食')))) ? '<span class="fresh-badge">新鮮</span>' : '';
 
     let buyInfo = '';
     if (item.buyDate) {
       if (buyDays === 0) buyInfo = '<span class="buy-date">今天買入</span>';
       else if (buyDays === 1) buyInfo = '<span class="buy-date">昨天買入</span>';
-      else buyInfo = `<span class="buy-date">${buyDays}天前買入</span>`;
+      else buyInfo = '<span class="buy-date">' + buyDays + '天前買入</span>';
     }
 
-    return `<div class="item-card ${isExpiring ? 'expiring' : ''} ${isExpired ? 'expired' : ''} ${isFresh ? 'fresh' : ''}">
-      <div class="item-img-wrap" onclick="event.stopPropagation();openDetail(${item.id})">${freshBadge}${imgHtml}</div>
-      <div class="item-info" onclick="openDetail(${item.id})">
-        <div class="item-name">${escapeHtml(item.name)}</div>
-        <div class="item-meta">
-          <span>📍 ${escapeHtml(item.location)}</span>
-          <span>📦 ${item.qty}${escapeHtml(item.unit)}</span>
-          ${buyInfo}
-          ${getExpiryBadge(days)}
-        </div>
-      </div>
-      <button class="out-btn" onclick="event.stopPropagation();quickOut(${item.id})">出倉</button>
-    </div>`;
+    const batchCheckbox = batchMode ? '<div class="batch-check ' + (isSelected ? 'checked' : '') + '">' + (isSelected ? '✓' : '') + '</div>' : '';
+    const outBtn = batchMode ? '' : '<button class="out-btn" onclick="event.stopPropagation();quickOut(' + item.id + ')">出倉</button>';
+    const qtyControls = !batchMode ? '<div class="qty-controls"><button class="qty-btn" onclick="event.stopPropagation();adjustQty(' + item.id + ', -1)">−</button><span class="qty-display">' + item.qty + '</span><button class="qty-btn" onclick="event.stopPropagation();adjustQty(' + item.id + ', 1)">+</button></div>' : '';
+
+    const clickAction = batchMode ? 'toggleSelectItem(' + item.id + ', event)' : 'openDetail(' + item.id + ')';
+
+    return '<div class="item-card ' + (isExpiring ? 'expiring ' : '') + (isExpired ? 'expired ' : '') + (isFresh ? 'fresh ' : '') + (isSelected ? 'selected-batch ' : '') + (batchMode ? 'batch-mode' : '') + '">' +
+      batchCheckbox +
+      '<div class="item-img-wrap" onclick="' + clickAction + '">' + freshBadge + imgHtml + '</div>' +
+      '<div class="item-info" onclick="' + clickAction + '">' +
+        '<div class="item-name">' + escapeHtml(item.name) + '</div>' +
+        '<div class="item-meta">' +
+          '<span>📍 ' + escapeHtml(item.location) + '</span>' +
+          '<span>📦 ' + item.qty + escapeHtml(item.unit) + '</span>' +
+          buyInfo +
+          getExpiryBadge(days) +
+        '</div>' +
+        qtyControls +
+      '</div>' +
+      outBtn +
+    '</div>';
   }).join('');
 
-  document.getElementById('itemCount').textContent = `${filtered.length} 件物品`;
+  document.getElementById('itemCount').textContent = filtered.length + ' 件物品';
 }
 
 function filterCategory(cat) {
@@ -552,6 +627,23 @@ function searchItems() {
   renderItems(document.getElementById('searchInput').value);
 }
 
+// ========== 數量調整 ==========
+function adjustQty(id, delta) {
+  const item = items.find(i => i.id === id);
+  if (!item) return;
+
+  const newQty = item.qty + delta;
+  if (newQty <= 0) {
+    quickOut(id);
+    return;
+  }
+
+  item.qty = newQty;
+  saveToCloud();
+  renderItems(document.getElementById('searchInput').value);
+  updateStats();
+}
+
 // ========== 過期提醒 ==========
 function checkExpiringItems() {
   const expiring = items.filter(i => {
@@ -562,13 +654,7 @@ function checkExpiringItems() {
   const alertDiv = document.getElementById('expiryAlert');
   if (expiring.length > 0) {
     alertDiv.style.display = 'block';
-    alertDiv.innerHTML = `<div class="expiry-alert-inner">
-      <span style="font-size:24px">⚠️</span>
-      <div>
-        <div class="expiry-alert-text">有 ${expiring.length} 件物品即將過期</div>
-        <div class="expiry-alert-sub">請盡快使用或檢查</div>
-      </div>
-    </div>`;
+    alertDiv.innerHTML = '<div class="expiry-alert-inner"><span style="font-size:24px">⚠️</span><div><div class="expiry-alert-text">有 ' + expiring.length + ' 件物品即將過期</div><div class="expiry-alert-sub">請盡快使用或檢查</div></div></div>';
   } else {
     alertDiv.style.display = 'none';
   }
@@ -633,6 +719,8 @@ function saveItem() {
   const name = document.getElementById('itemName').value.trim();
   if (!name) { alert('請輸入物品名稱'); return; }
 
+  const existingItem = editingId ? items.find(i => i.id === editingId) : null;
+
   const item = {
     id: editingId || Date.now(),
     name: name,
@@ -643,8 +731,8 @@ function saveItem() {
     buyDate: document.getElementById('itemBuyDate').value,
     expiry: document.getElementById('itemExpiry').value,
     note: document.getElementById('itemNote').value.trim(),
-    image: currentImageData || (editingId ? items.find(i => i.id === editingId)?.image || '' : ''),
-    added: editingId ? (items.find(i => i.id === editingId)?.added || getTodayHK()) : getTodayHK()
+    image: currentImageData || (existingItem ? existingItem.image || '' : ''),
+    added: existingItem ? existingItem.added || getTodayHK() : getTodayHK()
   };
 
   if (editingId) {
@@ -664,6 +752,7 @@ function saveItem() {
 
 // ========== 詳情 ==========
 function openDetail(id) {
+  if (batchMode) return;
   detailItemId = id;
   const item = items.find(i => i.id === id);
   if (!item) return;
@@ -674,19 +763,20 @@ function openDetail(id) {
 
   const imgDiv = document.getElementById('detailImg');
   if (item.image) {
-    imgDiv.innerHTML = `<img src="${item.image}" alt="${escapeHtml(item.name)}">`;
+    imgDiv.innerHTML = '<img src="' + item.image + '" alt="' + escapeHtml(item.name) + '">';
+    imgDiv.style.background = '';
   } else {
-    imgDiv.innerHTML = `<span class="detail-icon-fallback">${cfg.icon}</span>`;
-    imgDiv.style.background = `linear-gradient(135deg, #2c3e50 0%, #4a6741 100%)`;
+    imgDiv.innerHTML = '<span class="detail-icon-fallback">' + cfg.icon + '</span>';
+    imgDiv.style.background = 'linear-gradient(135deg, #2c3e50 0%, #4a6741 100%)';
   }
 
   const catEl = document.getElementById('detailCategory');
-  catEl.textContent = `${cfg.icon} ${cfg.label}`;
+  catEl.textContent = cfg.icon + ' ' + cfg.label;
   catEl.style.background = cfg.bg || cfg.color + '20';
   catEl.style.color = cfg.color;
 
   document.getElementById('detailName').textContent = item.name;
-  document.getElementById('detailQty').textContent = `數量：${item.qty} ${item.unit}`;
+  document.getElementById('detailQty').textContent = '數量：' + item.qty + ' ' + item.unit;
   document.getElementById('detailLocation').textContent = item.location;
 
   const buyRow = document.getElementById('detailBuyDateRow');
@@ -696,7 +786,7 @@ function openDetail(id) {
     if (buyDays !== null) {
       if (buyDays === 0) text += '（今天）';
       else if (buyDays === 1) text += '（昨天）';
-      else text += `（${buyDays} 天前）`;
+      else text += '（' + buyDays + ' 天前）';
     }
     document.getElementById('detailBuyDate').textContent = text;
   } else {
@@ -707,10 +797,10 @@ function openDetail(id) {
     document.getElementById('detailExpiryRow').style.display = 'flex';
     let text = item.expiry;
     if (days !== null) {
-      if (days < 0) text += ` ⚠️ 已過期 ${Math.abs(days)} 天`;
+      if (days < 0) text += ' ⚠️ 已過期 ' + Math.abs(days) + ' 天';
       else if (days === 0) text += ' ⚠️ 今天到期';
-      else if (days <= 3) text += ` ⚠️ 還剩 ${days} 天`;
-      else text += `（還剩 ${days} 天）`;
+      else if (days <= 3) text += ' ⚠️ 還剩 ' + days + ' 天';
+      else text += '（還剩 ' + days + ' 天）';
     }
     const expEl = document.getElementById('detailExpiry');
     expEl.textContent = text;
@@ -750,7 +840,7 @@ function editItem() {
     currentImageData = item.image;
     const area = document.getElementById('imgUploadArea');
     area.classList.add('has-img');
-    area.innerHTML = `<img src="${item.image}" alt="預覽"><button class="img-remove" onclick="event.stopPropagation();removeImage()">×</button>`;
+    area.innerHTML = '<img src="' + item.image + '" alt="預覽"><button class="img-remove" onclick="event.stopPropagation();removeImage()">×</button>';
   } else {
     removeImage();
   }
@@ -777,12 +867,12 @@ function deleteItem() {
   showToast('物品已刪除');
 }
 
-// ========== 出倉 ==========
+// ========== 出倉（修復版）==========
 function quickOut(id) {
   outItemId = id;
   const item = items.find(i => i.id === id);
   if (!item) return;
-  document.getElementById('confirmOutText').textContent = `「${item.name}」將從倉庫中移除`;
+  document.getElementById('confirmOutText').textContent = '「' + item.name + '」將從倉庫中移除';
   document.getElementById('confirmOutModal').classList.add('show');
 }
 
@@ -791,7 +881,7 @@ function confirmOut() {
   outItemId = detailItemId;
   const item = items.find(i => i.id === detailItemId);
   if (!item) return;
-  document.getElementById('confirmOutText').textContent = `「${item.name}」將從倉庫中移除`;
+  document.getElementById('confirmOutText').textContent = '「' + item.name + '」將從倉庫中移除';
   document.getElementById('confirmOutModal').classList.add('show');
 }
 
@@ -803,6 +893,16 @@ function closeConfirmOut() {
 function doOut() {
   if (!outItemId) return;
   const item = items.find(i => i.id === outItemId);
+
+  if (item) {
+    outHistory.unshift({
+      ...item,
+      outDate: getTodayHK(),
+      outId: Date.now()
+    });
+    if (outHistory.length > 200) outHistory = outHistory.slice(0, 200);
+  }
+
   items = items.filter(i => i.id !== outItemId);
   saveToCloud();
   closeConfirmOut();
@@ -810,7 +910,119 @@ function doOut() {
   renderItems();
   updateStats();
   checkExpiringItems();
-  showToast(item ? `「${item.name}」已出倉` : '已出倉');
+  showToast(item ? '「' + item.name + '」已出倉' : '已出倉');
+}
+
+// ========== 出倉歷史 ==========
+function openHistoryModal() {
+  renderOutHistory();
+  document.getElementById('historyModal').classList.add('show');
+}
+
+function closeHistoryModal() {
+  document.getElementById('historyModal').classList.remove('show');
+}
+
+function renderOutHistory() {
+  const list = document.getElementById('historyList');
+  const empty = document.getElementById('historyEmpty');
+
+  if (outHistory.length === 0) {
+    list.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+
+  empty.style.display = 'none';
+  list.innerHTML = outHistory.map(h => {
+    const cfg = categories[h.category] || categories.other;
+    return '<div class="history-item"><div class="history-icon">' + cfg.icon + '</div><div class="history-info"><div class="history-name">' + escapeHtml(h.name) + '</div><div class="history-meta">📦 ' + h.qty + escapeHtml(h.unit) + ' · 📍 ' + escapeHtml(h.location) + ' · 🗓️ 出倉於 ' + h.outDate + '</div></div><button class="history-restore" onclick="restoreItem(\'' + h.outId + '\')">↩️</button></div>';
+  }).join('');
+}
+
+function restoreItem(outId) {
+  const histItem = outHistory.find(h => h.outId == outId);
+  if (!histItem) return;
+
+  const restored = { ...histItem };
+  delete restored.outDate;
+  delete restored.outId;
+  restored.id = Date.now();
+
+  items.push(restored);
+  outHistory = outHistory.filter(h => h.outId != outId);
+
+  saveToCloud();
+  renderOutHistory();
+  renderItems();
+  updateStats();
+  showToast('「' + restored.name + '」已恢復入倉');
+}
+
+function clearHistory() {
+  if (!confirm('確定要清空所有出倉歷史嗎？此操作無法復原。')) return;
+  outHistory = [];
+  saveToCloud();
+  renderOutHistory();
+  showToast('出倉歷史已清空');
+}
+
+// ========== 數據導出/導入 ==========
+function exportData() {
+  const data = {
+    family: currentFamily,
+    exportDate: getTodayHK(),
+    categories: categories,
+    items: items,
+    outHistory: outHistory
+  };
+
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '家倉備份_' + currentFamily + '_' + getTodayHK() + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('數據已導出');
+}
+
+function importData() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target.result);
+        if (!data.items) {
+          alert('無效的備份檔案');
+          return;
+        }
+        if (!confirm('確定要導入「' + (data.family || '未知家庭') + '」的備份嗎？這將覆蓋當前數據。')) return;
+
+        if (data.categories) categories = data.categories;
+        if (data.items) items = data.items;
+        if (data.outHistory) outHistory = data.outHistory;
+
+        saveToCloud();
+        renderCategoryTabs();
+        renderCategorySelects();
+        renderItems();
+        updateStats();
+        checkExpiringItems();
+        showToast('數據導入成功');
+      } catch (err) {
+        alert('導入失敗：' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
 }
 
 // ========== 設定 ==========
@@ -821,6 +1033,444 @@ function openSettings() {
 
 function closeSettings() {
   document.getElementById('settingsModal').classList.remove('show');
+}
+
+
+
+
+
+// ========== AI 智能分類 ==========
+// 基於關鍵字匹配的本地規則引擎，無需 API，即時響應
+
+const aiCategoryRules = {
+  food: {
+    keywords: ['牛奶','麵包','餅乾','巧克力','糖果','薯片','飲料','果汁','汽水','茶','咖啡','米','麵','油','鹽','糖','醬油','醋','調味料','醬','罐頭','冷凍','冰淇淋','蛋糕','水果','蔬菜','肉','魚','蝦','蛋','豆腐','火腿','香腸','芝士','牛油','麥片','燕麥','堅果','乾果','蜂蜜','果醬','花生醬','沙律醬','芥末','胡椒粉','孜然','咖喱','八角','桂皮','花椒','辣椒','蒜','薑','蔥','洋蔥','蕃茄','薯仔','蘿蔔','白菜','菜心','生菜','菠菜','南瓜','冬瓜','翠玉瓜','茄子','青椒','紅椒','洋菇','金菇','木耳','海帶','紫菜','豆腐皮','腐竹','粉絲','米粉','河粉','烏冬','拉麵','意粉','通粉','飯','粥','湯','糖水','糖水','月餅','年糕','粽子','湯圓','餃子','包子','饅頭','燒賣','春卷','蘿蔔糕','馬蹄糕','蛋撻','曲奇','蛋卷','鳳梨酥','肉鬆','魚蛋','貢丸','牛丸','墨魚丸','蟹柳','午餐肉','腸仔','煙肉','煙三文魚','芝士片','奶油','忌廉','乳酪','奶昔','豆漿','杏仁茶','芝麻糊','核桃露','紅豆沙','綠豆沙','合桃露','杏仁露','薑汁撞奶','雙皮奶','龜苓膏','涼粉','仙草','豆花','豆腐花','布丁','布甸','果凍','啫喱','棉花糖','口香糖','香口膠','milk','bread','cookie','chocolate','candy','chip','drink','juice','soda','tea','coffee','rice','noodle','oil','sauce','vinegar','seasoning','can','frozen','ice cream','cake','fruit','vegetable','meat','fish','egg','tofu','ham','sausage','cheese','butter','cereal','oat','nut','honey','jam','peanut butter','salad dressing','mustard','pepper','cumin','curry'],
+    confidence: 0.85
+  },
+  medicine: {
+    keywords: ['藥','丸','膠囊','藥水','藥膏','藥油','藥貼','藥粉','藥片','感冒藥','退燒藥','止痛藥','胃藥','腸胃藥','過敏藥','皮膚藥','眼藥水','滴鼻液','喉糖','潤喉糖','維他命','維生素','補充劑','保健品','魚油','葉黃素','益生菌','酵素','膠原蛋白','鈣片','鐵丸','鋅片','葉酸','褪黑素','葡萄糖胺','軟骨素','冬蟲夏草','人參','花旗參','高麗參','靈芝','燕窩','雪蛤','阿膠','當歸','枸杞','紅棗','桂圓','菊花','玫瑰花','洛神花','陳皮','甘草','茯苓','薏米','蓮子','百合','雪耳','木耳','紅豆','綠豆','黑豆','黃豆','芝麻','核桃','杏仁','開心果','腰果','夏威夷果','碧根果','松子','栗子','蓮藕','馬蹄','茨實','淮山','黨參','北芪','川芎','白芍','熟地','首烏','天麻','杜仲','巴戟','肉蓯蓉','鎖陽','淫羊藿','鹿茸','鹿尾巴','海馬','海龍','花膠','鮑魚','瑤柱','蠔豉','蝦米','魚翅','海參','燕窩','蟲草','medicine','pill','capsule','syrup','ointment','cream','patch','powder','tablet','cold medicine','fever','painkiller','stomach','allergy','eye drop','nasal spray','throat lozenge','vitamin','supplement','fish oil','lutein','probiotic','enzyme','collagen','calcium','iron','zinc','folic acid','melatonin','glucosamine','chondroitin'],
+    confidence: 0.9
+  },
+  clothes: {
+    keywords: ['衫','褲','裙','外套','大衣','風衣','夾克','西裝','恤衫','T恤','衛衣','毛衣','針織','羊毛','棉質','絲綢','麻布','牛仔','皮革','羽絨','棉衣','風褸','雨衣','泳衣','內衣','內褲','胸罩','胸圍','襪','襪子','手套','圍巾','頸巾','帽','帽子','太陽帽','鴨舌帽','冷帽','貝雷帽','草帽','鞋','皮鞋','波鞋','運動鞋','涼鞋','拖鞋','高跟鞋','靴','長靴','短靴','雨靴','皮靴','帆布鞋','涼拖','人字拖','皮帶','腰帶','領帶','領結','蝴蝶結','絲巾','披肩','斗篷','圍裙','睡衣','睡袍','浴袍','家居服','運動服','瑜伽服','緊身衣','塑身衣','泳衣','比堅尼','潛水衣','滑雪服','校服','制服','工作服','圍裙','圍裙','手套','拳套','護膝','護肘','護腕','頭盔','安全帽','眼鏡','太陽眼鏡','隱形眼鏡','手錶','手鐲','手鏈','頸鏈','耳環','戒指','胸針','髮夾','髮圈','頭飾','shoes','shirt','pants','skirt','dress','coat','jacket','suit','t-shirt','sweater','knit','wool','cotton','silk','linen','denim','leather','down','raincoat','swimwear','underwear','bra','socks','gloves','scarf','hat','cap','sneakers','sandals','slippers','heels','boots','belt','tie','bow','pajamas','robe','sportswear','yoga','uniform','workwear','glasses','sunglasses','watch','bracelet','necklace','earring','ring','brooch','hair clip'],
+    confidence: 0.8
+  },
+  electronics: {
+    keywords: ['電器','電子','電腦','筆記本','平板','手機','電話','相機','攝影機','電視','電視機','顯示器','屏幕','投影機','音響','喇叭','耳機','耳筒','音箱','擴音器','電風扇','冷氣','空調','暖爐','暖氣','電熱毯','電磁爐','電飯煲','微波爐','焗爐','烤箱','多士爐','咖啡機','榨汁機','攪拌機','豆漿機','麵包機','氣炸鍋','壓力鍋','慢煮鍋','火鍋爐','電熱水壺','飲水機','淨水器','濾水器','吸塵機','吸塵器','掃地機器人','拖地機','洗衣機','乾衣機','洗碗機','雪櫃','冰箱','冰櫃','飲水機','熱水器','煤氣爐','電爐','抽油煙機','抽濕機','加濕機','空氣清新機','空氣淨化器','風扇','暖風機','電暖爐','電毯','電池','充電器','充電線','數據線','USB','HDMI','插頭','插座','拖板','延長線','電線','燈泡','燈管','LED燈','檯燈','座地燈','天花燈','射燈','筒燈','燈帶','智能燈','門鈴','監控','攝像頭','門鎖','智能鎖','感應器','遙控器','滑鼠','鼠標','鍵盤','滑鼠墊','打印機','掃描器','影印機','傳真機','碎紙機','計數機','計算機','電子秤','體重秤','血壓計','血糖機','體溫計','溫度計','鬧鐘','時鐘','計時器','定時器','電子書','閱讀器','遊戲機','Switch','PS5','Xbox','遊戲手掣','遊戲手柄','VR眼鏡','無人機','航拍機','電子煙','加濕器','滅蚊燈','捕蚊燈','電蚊拍','電子秤','體脂秤','血氧機','按摩槍','筋膜槍','電動牙刷','水牙線','剃鬚刀','鬚刨','風筒','吹風機','直髮夾','捲髮器','電動剪','鼻毛剪','指甲剪','美容儀','導入儀','蒸臉機','脫毛機','除毛機','電腦','laptop','tablet','phone','camera','tv','monitor','projector','speaker','headphone','earphone','fan','air conditioner','heater','blanket','induction','rice cooker','microwave','oven','toaster','coffee machine','juicer','blender','air fryer','pressure cooker','kettle','water dispenser','purifier','vacuum','robot','washer','dryer','dishwasher','refrigerator','fridge','freezer','water heater','stove','hood','dehumidifier','humidifier','purifier','battery','charger','cable','usb','hdmi','plug','socket','power strip','wire','bulb','lamp','led','light','bell','camera','lock','sensor','remote','mouse','keyboard','printer','scanner','shredder','calculator','scale','thermometer','alarm','clock','timer','e-reader','console','controller','vr','drone','humidifier','mosquito','massage gun','toothbrush','shaver','hair dryer','straightener','curler'],
+    confidence: 0.85
+  },
+  other: {
+    keywords: ['文具','筆','鉛筆','原子筆','鋼筆','毛筆','螢光筆','擦膠','橡皮','膠水','漿糊','膠紙','膠帶','雙面膠','白膠漿','釘書機','釘','曲別針','萬字夾','夾','文件夾','文件袋','信封','信紙','筆記本','記事本','日曆','月曆','年曆','記事貼','便利貼','標籤貼','貼紙','顏色筆','水彩','油彩','粉彩','畫筆','畫板','畫架','顏料','墨汁','硯','宣紙','卡紙','畫紙','摺紙','勞作','手工','剪刀','美工刀','界刀','刀片','尺子','間尺','圓規','量角器','三角板','計數機','計算機','書','雜誌','報紙','地圖','字典','辭典','百科全書','教科書','參考書','小說','漫畫','繪本','圖鑑','相簿','相冊','日記','帳簿','收據簿','發票簿','支票簿','名片簿','電話簿','記事簿','便條簿','草稿紙','影印紙','打印紙','傳真紙','標籤紙','貼紙','海報','banner','旗','橫額','氣球','彩帶','絲帶','花','假花','乾花','花瓶','花盆','花架','園藝','種子','泥土','肥料','殺蟲劑','除草劑','澆水壺','園藝工具','鏟','鋤','耙','剪刀','修枝剪','手套','圍裙','雨靴','帳篷','睡袋','露營','野餐','燒烤','BBQ','釣魚','魚竿','魚餌','魚網','潛水','浮潛','游泳','泳鏡','泳帽','救生衣','浮板','瑜伽墊','啞鈴','健身','運動','球','籃球','足球','排球','羽毛球','網球','乒乓球','桌球','棒球','壘球','高爾夫','保齡球','飛鏢','跳繩','呼拉圈','滑板','滾軸','單車','自行車','嬰兒車','推車','汽車','玩具','公仔','毛公仔','積木','lego','拼圖','模型','遙控','陀螺','卡牌','撲克牌','麻將','象棋','圍棋','軍棋','飛行棋','大富翁','uno','board game','party game','禮物','禮品','包裝紙','禮物袋','禮物盒','賀卡','聖誕卡','新年卡','生日卡','情人卡','蠟燭','香薰','精油','擴香','香氛','香水','化妝品','護膚品','洗面奶','潔面乳','爽膚水','精華液','乳液','面霜','眼霜','防曬','隔離霜','粉底','BB霜','CC霜','遮瑕','粉餅','碎粉','胭脂','眼影','眼線','睫毛膏','唇膏','口紅','唇彩','護唇膏','卸妝','面膜','眼膜','鼻貼','去角質','磨砂','潤膚露','body lotion','hand cream','護手霜','足膜','頸霜','胸霜','纖體','瘦身','美體','染髮劑','染髮','燙髮','護髮素','洗頭水','護髮','造型','髮泥','髮蠟','髮膠','定型','噴霧','止汗劑','除臭劑','香水','古龍水','香體露','剃毛膏','脫毛膏','化妝棉','棉花棒','牙線','牙籤','漱口水','牙膏','牙刷','毛巾','浴巾','面巾','手巾','地巾','浴袍','浴帽','浴簾','浴球','海綿','肥皂','香皂','沐浴露','洗髮水','conditioner','shampoo','body wash','hand wash','detergent','洗衣粉','洗衣液','柔順劑','漂白水','消毒水','清潔劑','清潔劑','玻璃水','地板蠟','傢俬蠟','殺蟲水','通渠劑','潔廁劑','廚房紙','廁紙','面紙','紙巾','濕紙巾','濕巾','尿片','紙尿褲','衛生巾','護墊','棉花','紗布','膠布','繃帶','紅藥水','碘酒','酒精','雙氧水','生理鹽水','退熱貼','止痛貼','萬金油','白花油','驅風油','保濟丸','整腸丸','喇叭牌','黃道益活絡油','無比滴','蚊怕水','驅蚊','防曬','stapler','tape','glue','scissors','paper','notebook','pen','pencil','book','magazine','map','dictionary','novel','comic','photo album','diary','calendar','sticky note','label','sticker','paint','brush','canvas','color','craft','ruler','calculator','toy','doll','plush','lego','puzzle','model','card','game','gift','wrap','candle','aroma','essential oil','diffuser','perfume','cosmetic','skincare','cleanser','toner','serum','lotion','cream','sunscreen','foundation','powder','blush','eyeshadow','eyeliner','mascara','lipstick','lip balm','mask','makeup remover','body lotion','hand cream','hair dye','shampoo','conditioner','styling','spray','deodorant','cotton pad','cotton swab','floss','toothpaste','towel','bathrobe','shower cap','curtain','sponge','soap','shower gel','detergent','laundry','bleach','disinfectant','cleaner','tissue','wet wipe','diaper','sanitary pad','bandage','band-aid','alcohol','sunscreen'],
+    confidence: 0.7
+  }
+};
+
+// AI 智能分類主函數
+function aiClassifyItemName(name) {
+  if (!name || typeof name !== 'string') return { category: 'other', confidence: 0 };
+
+  const lowerName = name.toLowerCase();
+  const scores = {};
+
+  for (const [catKey, rule] of Object.entries(aiCategoryRules)) {
+    let score = 0;
+    let matchedKeywords = [];
+
+    for (const keyword of rule.keywords) {
+      const lowerKeyword = keyword.toLowerCase();
+      // 完全匹配
+      if (lowerName === lowerKeyword) {
+        score += 10;
+        matchedKeywords.push(keyword);
+      }
+      // 包含關鍵字
+      else if (lowerName.includes(lowerKeyword)) {
+        // 關鍵字越長，權重越高（避免短詞誤匹配）
+        const weight = Math.min(keyword.length / 2, 5);
+        score += weight;
+        matchedKeywords.push(keyword);
+      }
+      // 關鍵字包含名稱（反向匹配）
+      else if (lowerKeyword.includes(lowerName) && lowerName.length >= 2) {
+        score += 2;
+        matchedKeywords.push(keyword);
+      }
+    }
+
+    scores[catKey] = {
+      score: score,
+      matched: matchedKeywords,
+      confidence: rule.confidence
+    };
+  }
+
+  // 找出最高分
+  let bestCat = 'other';
+  let bestScore = 0;
+
+  for (const [cat, data] of Object.entries(scores)) {
+    if (data.score > bestScore) {
+      bestScore = data.score;
+      bestCat = cat;
+    }
+  }
+
+  // 計算信心度
+  let confidence = 0;
+  if (bestScore >= 10) confidence = 0.95;
+  else if (bestScore >= 5) confidence = 0.85;
+  else if (bestScore >= 3) confidence = 0.7;
+  else if (bestScore >= 1) confidence = 0.5;
+  else confidence = 0.3;
+
+  return {
+    category: bestCat,
+    confidence: confidence,
+    score: bestScore,
+    allScores: scores
+  };
+}
+
+// 顯示 AI 分類建議
+function showAIClassificationSuggestion(name) {
+  const result = aiClassifyItemName(name);
+  const suggestionEl = document.getElementById('aiCategorySuggestion');
+
+  if (!suggestionEl) return;
+
+  if (result.confidence >= 0.5 && name.length >= 2) {
+    const cfg = categories[result.category] || categories.other;
+    const confidenceText = result.confidence >= 0.85 ? '高度確信' : 
+                           result.confidence >= 0.7 ? '很可能' : '可能是';
+
+    suggestionEl.innerHTML = 
+      '<div class="ai-suggestion-box">' +
+        '<span class="ai-suggestion-icon">🤖</span>' +
+        '<div class="ai-suggestion-content">' +
+          '<div class="ai-suggestion-text">' + confidenceText + '這是 <strong>' + cfg.icon + ' ' + cfg.label + '</strong></div>' +
+          '<div class="ai-suggestion-actions">' +
+            '<button class="ai-suggestion-btn accept" onclick="acceptAICategory(\'' + result.category + '\')">✓ 採用</button>' +
+            '<button class="ai-suggestion-btn reject" onclick="hideAISuggestion()">✕ 不用</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    suggestionEl.style.display = 'block';
+
+    // 保存建議的分類
+    window._aiSuggestedCategory = result.category;
+  } else {
+    suggestionEl.style.display = 'none';
+    window._aiSuggestedCategory = null;
+  }
+}
+
+// 採用 AI 建議的分類
+function acceptAICategory(category) {
+  selectedCategory = category;
+  updateCategorySelection();
+  hideAISuggestion();
+  showToast('🤖 已採用 AI 建議的分類');
+}
+
+// 隱藏 AI 建議
+function hideAISuggestion() {
+  const el = document.getElementById('aiCategorySuggestion');
+  if (el) el.style.display = 'none';
+  window._aiSuggestedCategory = null;
+}
+
+// ========== 條碼掃描功能 ==========
+let barcodeScanner = null;
+let isScanning = false;
+
+// 條碼資料庫查詢（Open Food Facts - 免費無需API Key）
+async function lookupBarcode(barcode) {
+  showToast('🔍 正在查詢條碼資料...');
+
+  try {
+    // 嘗試 Open Food Facts（食品資料庫）
+    const response = await fetch(
+      `https://world.openfoodfacts.org/api/v2/product/${barcode}.json?fields=product_name,brands,categories_tags,image_url,image_front_url,quantity,packaging,labels_tags`,
+      { method: 'GET', headers: { 'Accept': 'application/json' } }
+    );
+
+    if (!response.ok) throw new Error('API 請求失敗');
+
+    const data = await response.json();
+
+    if (data.status === 1 && data.product) {
+      const p = data.product;
+      return {
+        found: true,
+        name: p.product_name || '',
+        brand: p.brands || '',
+        category: mapFoodCategory(p.categories_tags),
+        image: p.image_url || p.image_front_url || '',
+        quantity: p.quantity || '',
+        packaging: p.packaging || '',
+        source: 'Open Food Facts'
+      };
+    }
+
+    return { found: false };
+  } catch (err) {
+    console.error('Barcode lookup error:', err);
+    return { found: false, error: err.message };
+  }
+}
+
+// 將 Open Food Facts 分類映射到家倉分類
+function mapFoodCategory(categories) {
+  if (!categories || !Array.isArray(categories)) return 'food';
+
+  const cats = categories.map(c => c.toLowerCase());
+
+  if (cats.some(c => c.includes('beverage') || c.includes('drink') || c.includes('juice') || c.includes('milk') || c.includes('water'))) return 'food';
+  if (cats.some(c => c.includes('medicine') || c.includes('drug') || c.includes('pharmaceutical') || c.includes('vitamin') || c.includes('supplement'))) return 'medicine';
+  if (cats.some(c => c.includes('electronics') || c.includes('appliance') || c.includes('device'))) return 'electronics';
+  if (cats.some(c => c.includes('clothing') || c.includes('apparel') || c.includes('fashion') || c.includes('textile'))) return 'clothes';
+
+  return 'food';
+}
+
+// 打開條碼掃描器
+function openBarcodeScanner() {
+  document.getElementById('barcodeModal').classList.add('show');
+  startBarcodeScan();
+}
+
+// 關閉條碼掃描器
+function closeBarcodeScanner() {
+  stopBarcodeScan();
+  document.getElementById('barcodeModal').classList.remove('show');
+  document.getElementById('barcodeResult').style.display = 'none';
+}
+
+// 開始掃描
+function startBarcodeScan() {
+  const reader = document.getElementById('barcodeReader');
+  const status = document.getElementById('scanStatus');
+
+  if (isScanning) return;
+  isScanning = true;
+
+  status.textContent = '正在啟動相機...';
+  status.className = 'scan-status scanning';
+
+  // 使用 html5-qrcode 庫
+  if (typeof Html5Qrcode === 'undefined') {
+    loadScript('https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js')
+      .then(() => initScanner(reader, status))
+      .catch(() => {
+        status.textContent = '無法載入掃描器，請手動輸入條碼';
+        status.className = 'scan-status error';
+        showManualInput();
+      });
+  } else {
+    initScanner(reader, status);
+  }
+}
+
+// 載入外部腳本
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+// 初始化掃描器
+function initScanner(reader, status) {
+  barcodeScanner = new Html5Qrcode('barcodeReader');
+
+  const config = {
+    fps: 10,
+    qrbox: { width: 250, height: 150 },
+    aspectRatio: 1.0,
+    formatsToSupport: [
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.EAN_8,
+      Html5QrcodeSupportedFormats.UPC_A,
+      Html5QrcodeSupportedFormats.UPC_E,
+      Html5QrcodeSupportedFormats.CODE_128,
+      Html5QrcodeSupportedFormats.CODE_39
+    ]
+  };
+
+  barcodeScanner.start(
+    { facingMode: 'environment' },
+    config,
+    onBarcodeDetected,
+    onScanFailure
+  ).then(() => {
+    status.textContent = '請將條碼對準框內';
+    status.className = 'scan-status ready';
+  }).catch(err => {
+    console.error('Camera error:', err);
+    status.textContent = '無法開啟相機，請檢查權限或手動輸入';
+    status.className = 'scan-status error';
+    showManualInput();
+    isScanning = false;
+  });
+}
+
+// 掃描失敗回調（持續掃描中，非錯誤）
+function onScanFailure(error) {
+  // 持續掃描中，不需要處理
+}
+
+// 偵測到條碼
+let lastScannedBarcode = '';
+let scanCooldown = false;
+
+function onBarcodeDetected(decodedText, decodedResult) {
+  if (scanCooldown) return;
+  if (decodedText === lastScannedBarcode) return;
+
+  lastScannedBarcode = decodedText;
+  scanCooldown = true;
+
+  // 停止掃描
+  stopBarcodeScan();
+
+  const status = document.getElementById('scanStatus');
+  status.textContent = '已掃描：' + decodedText;
+  status.className = 'scan-status success';
+
+  // 查詢產品資料
+  lookupAndFill(decodedText);
+
+  // 3秒後可重新掃描
+  setTimeout(() => { scanCooldown = false; }, 3000);
+}
+
+// 停止掃描
+function stopBarcodeScan() {
+  if (barcodeScanner && isScanning) {
+    barcodeScanner.stop().catch(() => {});
+    isScanning = false;
+  }
+}
+
+// 顯示手動輸入
+function showManualInput() {
+  document.getElementById('manualInputArea').style.display = 'block';
+}
+
+// 手動輸入條碼
+function manualBarcodeLookup() {
+  const input = document.getElementById('manualBarcodeInput');
+  const barcode = input.value.trim();
+  if (!barcode) { alert('請輸入條碼號碼'); return; }
+  lookupAndFill(barcode);
+}
+
+// 查詢並填充表單
+async function lookupAndFill(barcode) {
+  const resultArea = document.getElementById('barcodeResult');
+  const resultContent = document.getElementById('barcodeResultContent');
+
+  resultArea.style.display = 'block';
+  resultContent.innerHTML = '<div style="text-align:center;padding:20px">🔍 查詢中...</div>';
+
+  const data = await lookupBarcode(barcode);
+
+  if (data.found) {
+    // 顯示查詢結果
+    let html = '<div class="barcode-product-card">';
+    if (data.image) {
+      html += '<img src="' + data.image + '" alt="產品圖片" class="barcode-product-img">';
+    }
+    html += '<div class="barcode-product-info">';
+    html += '<div class="barcode-product-name">' + escapeHtml(data.name) + '</div>';
+    if (data.brand) html += '<div class="barcode-product-brand">' + escapeHtml(data.brand) + '</div>';
+    if (data.quantity) html += '<div class="barcode-product-qty">規格：' + escapeHtml(data.quantity) + '</div>';
+    html += '<div class="barcode-product-source">資料來源：' + data.source + '</div>';
+    html += '</div></div>';
+
+    html += '<div style="display:flex;gap:10px;margin-top:16px">';
+    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAdd(\'' + barcode + '\', \'' + escapeHtml(data.name).replace(/'/g, "\\'") + '\', \'' + data.category + '\', \'' + (data.image || '') + '\', \'' + escapeHtml(data.quantity || '').replace(/'/g, "\\'") + '\')">✅ 確認入倉</button>';
+    html += '<button class="btn" style="flex:1" onclick="retryBarcodeScan()">🔄 重新掃描</button>';
+    html += '</div>';
+
+    resultContent.innerHTML = html;
+
+    // 預填充資料供確認使用
+    window._barcodeData = {
+      barcode: barcode,
+      name: data.name,
+      category: data.category,
+      image: data.image,
+      quantity: data.quantity,
+      brand: data.brand
+    };
+  } else {
+    let html = '<div style="text-align:center;padding:20px">';
+    html += '<div style="font-size:48px;margin-bottom:12px">😕</div>';
+    html += '<div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:8px">找不到此產品資料</div>';
+    html += '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px">條碼：' + barcode + '</div>';
+    html += '<div style="display:flex;gap:10px">';
+    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAdd(\'' + barcode + '\', \'\', \'food\', \'\', \'\')">➕ 手動新增</button>';
+    html += '<button class="btn" style="flex:1" onclick="retryBarcodeScan()">🔄 重新掃描</button>';
+    html += '</div></div>';
+
+    resultContent.innerHTML = html;
+  }
+}
+
+// 重新掃描
+function retryBarcodeScan() {
+  document.getElementById('barcodeResult').style.display = 'none';
+  document.getElementById('manualBarcodeInput').value = '';
+  lastScannedBarcode = '';
+  scanCooldown = false;
+  startBarcodeScan();
+}
+
+// 確認條碼入倉
+function confirmBarcodeAdd(barcode, name, category, image, quantity) {
+  // 關閉掃描器
+  closeBarcodeScanner();
+
+  // 打開新增物品彈窗
+  openAddModal();
+
+  // 填充資料
+  if (name) document.getElementById('itemName').value = name;
+  if (category) {
+    selectedCategory = category;
+    updateCategorySelection();
+  }
+  if (image) {
+    currentImageData = image;
+    const area = document.getElementById('imgUploadArea');
+    area.classList.add('has-img');
+    area.innerHTML = '<img src="' + image + '" alt="產品圖片"><button class="img-remove" onclick="event.stopPropagation();removeImage()">×</button>';
+  }
+
+  // 嘗試解析數量
+  if (quantity) {
+    const qtyMatch = quantity.match(/(\d+)/);
+    if (qtyMatch) {
+      document.getElementById('itemQty').value = qtyMatch[1];
+    }
+    const unitMatch = quantity.match(/\d+\s*(\w+)/);
+    if (unitMatch) {
+      document.getElementById('itemUnit').value = unitMatch[1];
+    }
+  }
+
+  // 在備註中添加條碼資訊
+  const noteEl = document.getElementById('itemNote');
+  const existingNote = noteEl.value;
+  const barcodeNote = '條碼：' + barcode;
+  noteEl.value = existingNote ? existingNote + '\\n' + barcodeNote : barcodeNote;
+
+  showToast('📦 已帶入條碼資料，請確認後儲存');
 }
 
 // ========== PWA ==========
@@ -864,7 +1514,6 @@ function setupOfflineDetection() {
       bar.classList.remove('show');
       if (!isOnline && db) {
         isOnline = true;
-        // 重新連線時嘗試同步
         saveToCloud();
       }
     } else {
