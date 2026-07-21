@@ -790,13 +790,14 @@ function openDetail(id) {
     imgDiv.style.background = '';
   } else {
     imgDiv.innerHTML = '<span class="detail-icon-fallback">' + cfg.icon + '</span>';
-    imgDiv.style.background = 'linear-gradient(135deg, #2c3e50 0%, #4a6741 100%)';
+    imgDiv.style.background = 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)';
   }
 
   const catEl = document.getElementById('detailCategory');
   catEl.textContent = cfg.icon + ' ' + cfg.label;
   catEl.style.background = cfg.bg || cfg.color + '20';
   catEl.style.color = cfg.color;
+  catEl.style.border = '1px solid ' + (cfg.color || '#c9a96e') + '40';
 
   document.getElementById('detailName').textContent = item.name;
   document.getElementById('detailQty').textContent = '數量：' + item.qty + ' ' + item.unit;
@@ -841,7 +842,7 @@ function openDetail(id) {
     }
     const expEl = document.getElementById('detailExpiry');
     expEl.textContent = text;
-    expEl.style.color = days !== null && days <= 3 ? '#e74c3c' : '#1c1c1e';
+    expEl.style.color = days !== null && days <= 3 ? '#e57373' : '#e8e4dc';
   } else {
     document.getElementById('detailExpiryRow').style.display = 'none';
   }
@@ -973,15 +974,21 @@ function closeHistoryModal() {
 function renderOutHistory() {
   const list = document.getElementById('historyList');
   const empty = document.getElementById('historyEmpty');
+  const searchTerm = document.getElementById('outHistorySearch') ? document.getElementById('outHistorySearch').value.trim().toLowerCase() : '';
 
-  if (outHistory.length === 0) {
+  let filtered = outHistory;
+  if (searchTerm) {
+    filtered = outHistory.filter(h => h.name.toLowerCase().includes(searchTerm));
+  }
+
+  if (filtered.length === 0) {
     list.innerHTML = '';
     empty.style.display = 'block';
     return;
   }
 
   empty.style.display = 'none';
-  list.innerHTML = outHistory.map(h => {
+  list.innerHTML = filtered.map(h => {
     const cfg = categories[h.category] || categories.other;
     return '<div class="history-item"><div class="history-icon">' + cfg.icon + '</div><div class="history-info"><div class="history-name">' + escapeHtml(h.name) + '</div><div class="history-meta">📦 ' + h.qty + escapeHtml(h.unit) + ' · 📍 ' + escapeHtml(h.location) + ' · 🗓️ 出倉於 ' + h.outDate + '</div></div><button class="history-restore" onclick="restoreItem(\'' + h.outId + '\')">↩️</button></div>';
   }).join('');
@@ -1090,10 +1097,14 @@ function renderActionHistory() {
   const list = document.getElementById('actionHistoryList');
   const empty = document.getElementById('actionHistoryEmpty');
   const filter = document.getElementById('actionHistoryFilter').value;
+  const searchTerm = document.getElementById('actionHistorySearch').value.trim().toLowerCase();
 
   let filtered = actionHistory;
   if (filter !== 'all') {
-    filtered = actionHistory.filter(a => a.type === filter);
+    filtered = filtered.filter(a => a.type === filter);
+  }
+  if (searchTerm) {
+    filtered = filtered.filter(a => a.itemName.toLowerCase().includes(searchTerm));
   }
 
   if (filtered.length === 0) {
