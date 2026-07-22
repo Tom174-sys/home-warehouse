@@ -59,7 +59,22 @@ function init() {
     currentPassword = savedPassword;
     document.getElementById('familyDisplayName').textContent = currentFamily + '的家倉';
     showMainApp();
-    initFirebase();
+    // 先載入本地資料，確保介面可立即使用
+    loadFromLocal();
+    // 在背景嘗試連接 Firebase，失敗也不影響使用
+    setTimeout(() => {
+      try {
+        if (typeof firebase !== 'undefined' && firebase.initializeApp) {
+          initFirebase();
+        } else {
+          console.warn('Firebase SDK 未載入，使用離線模式');
+          updateSyncStatus('offline');
+        }
+      } catch(e) {
+        console.warn('Firebase 未連接，使用離線模式:', e.message);
+        updateSyncStatus('offline');
+      }
+    }, 500);
   }
 
   setupInstallPrompt();
@@ -70,15 +85,27 @@ function init() {
 }
 
 function initFirebase() {
+  // 檢查 Firebase SDK 是否已載入
+  if (typeof firebase === 'undefined') {
+    console.warn('Firebase SDK 未載入，使用離線模式');
+    updateSyncStatus('offline');
+    return;
+  }
+
   try {
-    firebase.initializeApp(firebaseConfig);
+    // 初始化 Firebase（如果尚未初始化）
+    if (!firebase.apps || !firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
     db = firebase.database();
 
     const path = 'families/' + hashFamily(currentFamily, currentPassword);
     familyRef = db.ref(path);
 
+    // 先載入本地資料，確保介面立即顯示
     loadFromLocal();
 
+    // 嘗試連線 Firebase
     familyRef.on('value', (snapshot) => {
       const data = snapshot.val();
       if (data) {
@@ -92,10 +119,13 @@ function initFirebase() {
           else items = [];
           if (data.outHistory) outHistory = data.outHistory;
           else outHistory = [];
+          if (data.actionHistory) actionHistory = data.actionHistory;
+          else actionHistory = [];
 
           saveToLocal();
         }
       } else {
+        // 雲端沒有資料，檢查本地
         const localItems = localStorage.getItem('hw_items_v3');
         if (!localItems || JSON.parse(localItems).length === 0) {
           categories = JSON.parse(JSON.stringify(defaultCategories));
@@ -112,6 +142,16 @@ function initFirebase() {
       updateStats();
       checkExpiringItems();
       updateSyncStatus('online');
+    }, (error) => {
+      // Firebase 讀取失敗（權限問題等），使用本地模式
+      console.warn('Firebase 讀取失敗，使用離線模式:', error.message);
+      loadFromLocal();
+      renderCategoryTabs();
+      renderCategorySelects();
+      renderItems();
+      updateStats();
+      checkExpiringItems();
+      updateSyncStatus('offline');
     });
 
     db.ref('.info/connected').on('value', (snap) => {
@@ -122,6 +162,11 @@ function initFirebase() {
   } catch(e) {
     console.error('Firebase init error:', e);
     loadFromLocal();
+    renderCategoryTabs();
+    renderCategorySelects();
+    renderItems();
+    updateStats();
+    checkExpiringItems();
     updateSyncStatus('offline');
   }
 }
@@ -139,6 +184,7 @@ function hashFamily(name, password) {
 
 // ========== 登入 ==========
 function doLogin() {
+  console.log('doLogin called');
   const name = document.getElementById('familyName').value.trim();
   const password = document.getElementById('familyPassword').value.trim();
 
@@ -160,7 +206,15 @@ function doLogin() {
 
   document.getElementById('familyDisplayName').textContent = currentFamily + '的家倉';
   showMainApp();
-  initFirebase();
+  console.log('Login successful, mainApp shown');
+
+  // 先載入本地資料（如果有）
+  loadFromLocal();
+
+  // 嘗試初始化 Firebase（背景執行，不阻塞）
+  setTimeout(() => {
+    try { initFirebase(); } catch(e) { console.warn('Firebase 未連接，使用離線模式'); }
+  }, 100);
 }
 
 function showLoginError(msg) {
@@ -171,8 +225,10 @@ function showLoginError(msg) {
 }
 
 function showMainApp() {
+  console.log('showMainApp called');
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('mainApp').style.display = 'block';
+  console.log('mainApp display set to block');
 }
 
 function doLogout() {
@@ -188,7 +244,8 @@ function saveToCloud() {
   localStorage.setItem('hw_lastUpdate', now.toString());
   saveToLocal();
 
-  if (!familyRef || !isOnline) {
+  // 檢查 Firebase 是否可用
+  if (typeof firebase === 'undefined' || !familyRef || !isOnline) {
     updateSyncStatus('offline');
     return;
   }
@@ -204,8 +261,9 @@ function saveToCloud() {
   }).then(() => {
     updateSyncStatus('online');
   }).catch((err) => {
-    console.error('Sync error:', err);
+    console.warn('同步失敗，已保存到本地:', err.message);
     updateSyncStatus('offline');
+    saveToLocal();
   });
 }
 

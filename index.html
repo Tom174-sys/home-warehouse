@@ -306,7 +306,7 @@
     @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
     /* Barcode */
-    .barcode-btn { position: fixed; bottom: 24px; right: 168px; width: 60px; height: 60px; border-radius: 50%; background: linear-gradient(135deg, #5A8E6E 0%, #4A7A5E 100%); border: none; color: white; font-size: 24px; cursor: pointer; box-shadow: 0 6px 24px rgba(90,142,110,0.35); z-index: 10; display: flex; align-items: center; justify-content: center; touch-action: manipulation; transition: all 0.3s; }
+    .barcode-btn { position: fixed; bottom: 24px; left: 24px; width: 60px; height: 60px; border-radius: 50%; background: linear-gradient(135deg, #5A8E6E 0%, #4A7A5E 100%); border: none; color: white; font-size: 24px; cursor: pointer; box-shadow: 0 6px 24px rgba(90,142,110,0.35); z-index: 10; display: flex; align-items: center; justify-content: center; touch-action: manipulation; transition: all 0.3s; }
     .barcode-btn:hover { transform: translateY(-3px); box-shadow: 0 8px 32px rgba(90,142,110,0.45); }
     .barcode-btn:active { transform: scale(0.92); }
 
@@ -460,8 +460,8 @@
       </div>
     </div>
 
-    <button class="batch-mode-btn" id="batchModeBtn" onclick="toggleBatchMode()">☑️</button>
     <button class="barcode-btn" id="barcodeBtn" onclick="openBarcodeScanner()" title="掃描條碼">📷</button>
+    <button class="batch-mode-btn" id="batchModeBtn" onclick="toggleBatchMode()">☑️</button>
     <button class="fab" onclick="openAddModal()">+</button>
   </div>
 
@@ -476,22 +476,20 @@
         <label class="form-label">物品照片</label>
         <div id="imgUploadArea" class="img-upload-area" onclick="document.getElementById('imgInput').click()">
           <span class="img-upload-icon">📷</span>
-          <span class="img-upload-text">點擊上傳照片</span>
+          <span class="img-upload-text">點擊拍照或上傳照片</span>
           <span class="img-upload-hint">自動壓縮，家人可見</span>
         </div>
-        <input id="imgInput" type="file" accept="image/*" style="display:none" onchange="handleImageUpload(event)">
+        <input id="imgInput" type="file" accept="image/*" capture="environment" style="display:none" onchange="handleImageUpload(event)">
       </div>
 
       <div class="form-group">
         <label class="form-label">物品名稱 <span class="required">*</span></label>
-        <input id="itemName" class="form-input" type="text" placeholder="例如：牛奶、感冒藥..." oninput="showAIClassificationSuggestion(this.value)">
+        <input id="itemName" class="form-input" type="text" placeholder="例如：牛奶、感冒藥...">
       </div>
 
       <div class="form-group">
 
-      <!-- AI 智能分類建議 -->
-      <div id="aiCategorySuggestion" style="display:none"></div>
-        <label class="form-label">分類</label>
+   <label class="form-label">分類</label>
         <div class="cat-select-group" id="catSelectGroup"></div>
       </div>
 
@@ -741,19 +739,21 @@
   <div id="catModal" class="cat-modal-overlay" onclick="if(event.target===this)closeCatModal()">
     <div class="cat-modal-card">
       <div class="cat-modal-title">➕ 新增分類</div>
-      <div class="form-group">
-        <label class="form-label">分類名稱</label>
-        <input id="newCatName" class="form-input" type="text" placeholder="例如：文具、寵物用品...">
+      <div class="cat-modal-scroll">
+        <div class="form-group">
+          <label class="form-label">分類名稱</label>
+          <input id="newCatName" class="form-input" type="text" placeholder="例如：文具、寵物用品...">
+        </div>
+        <div class="form-group">
+          <label class="form-label">選擇圖示</label>
+          <div class="icon-picker" id="iconPicker"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">選擇顏色</label>
+          <div class="color-picker" id="colorPicker"></div>
+        </div>
       </div>
-      <div class="form-group">
-        <label class="form-label">選擇圖示</label>
-        <div class="icon-picker" id="iconPicker"></div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">選擇顏色</label>
-        <div class="color-picker" id="colorPicker"></div>
-      </div>
-      <div class="btn-group">
+      <div class="btn-group" style="margin-top:0;flex-shrink:0;">
         <button class="btn" onclick="closeCatModal()">取消</button>
         <button class="btn btn-primary" onclick="saveNewCategory()">建立分類</button>
       </div>
@@ -839,8 +839,8 @@
   </div>
 
 
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-database-compat.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
