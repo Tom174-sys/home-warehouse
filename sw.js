@@ -1,4 +1,4 @@
-const CACHE_NAME = 'home-warehouse-v5';
+const CACHE_NAME = 'home-warehouse-v6';
 const urlsToCache = [
   './',
   './index.html',

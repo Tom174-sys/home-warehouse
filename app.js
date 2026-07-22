@@ -281,21 +281,56 @@ function formatDate(date) {
   return `${year}-${month}-${day}`;
 }
 
+// Parse a YYYY-MM-DD string as Hong Kong timezone midnight
+// This ensures consistent date calculations regardless of browser timezone
+function parseHKDate(dateString) {
+  if (!dateString) return null;
+  // Extract year, month, day from the string
+  const [year, month, day] = dateString.split('-').map(Number);
+  // Create date using HK timezone explicitly via Intl
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Hong_Kong',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  });
+  // Use the date parts to construct a timestamp that represents HK midnight
+  // We construct an ISO string with the correct date and treat it as HK time
+  const hkDate = new Date(`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}T00:00:00+08:00`);
+  return hkDate;
+}
+
+// Get today's date as HK timezone midnight
+function getTodayHKDate() {
+  const now = new Date();
+  const hkFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Hong_Kong',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  });
+  const parts = hkFormatter.formatToParts(now);
+  const year = parts.find(p => p.type === 'year').value;
+  const month = parts.find(p => p.type === 'month').value;
+  const day = parts.find(p => p.type === 'day').value;
+  return new Date(`${year}-${month}-${day}T00:00:00+08:00`);
+}
+
 function getTodayHK() {
   return formatDate(new Date());
 }
 
 function getDaysUntilExpiry(expiryDate) {
   if (!expiryDate) return null;
-  const exp = new Date(expiryDate);
-  const today = new Date(); today.setHours(0,0,0,0);
+  // Parse expiryDate as HK timezone midnight for consistent calculation
+  const exp = parseHKDate(expiryDate);
+  const today = getTodayHKDate();
   return Math.ceil((exp - today) / (1000*60*60*24));
 }
 
 function getDaysSinceBuy(buyDate) {
   if (!buyDate) return null;
-  const buy = new Date(buyDate);
-  const today = new Date(); today.setHours(0,0,0,0);
+  // Parse buyDate as HK timezone midnight to avoid UTC offset issues
+  const buy = parseHKDate(buyDate);
+  const today = getTodayHKDate();
   return Math.floor((today - buy) / (1000*60*60*24));
 }
 
@@ -733,7 +768,8 @@ function saveItem() {
   const name = document.getElementById('itemName').value.trim();
   if (!name) { alert('請輸入物品名稱'); return; }
 
-  const existingItem = editingId ? items.find(i => i.id === editingId) : null;
+  const isEditing = !!editingId;
+  const existingItem = isEditing ? items.find(i => i.id === editingId) : null;
 
   const priceVal = document.getElementById('itemPrice').value.trim();
   const item = {
@@ -751,7 +787,7 @@ function saveItem() {
     added: existingItem ? existingItem.added || getTodayHK() : getTodayHK()
   };
 
-  if (editingId) {
+  if (isEditing) {
     const idx = items.findIndex(i => i.id === editingId);
     if (idx >= 0) items[idx] = item;
   } else {
@@ -764,7 +800,7 @@ function saveItem() {
   updateStats();
   checkExpiringItems();
 
-  if (editingId) {
+  if (isEditing) {
     addActionHistory('edit', item, '編輯物品資訊');
     showToast('物品已更新');
   } else {
@@ -1373,198 +1409,181 @@ function closeSettings() {
 
 
 
-// ========== AI 智能分類 ==========
-// 基於關鍵字匹配的本地規則引擎，無需 API，即時響應
-
-const aiCategoryRules = {
-  food: {
-    keywords: ['牛奶','麵包','餅乾','巧克力','糖果','薯片','飲料','果汁','汽水','茶','咖啡','米','麵','油','鹽','糖','醬油','醋','調味料','醬','罐頭','冷凍','冰淇淋','蛋糕','水果','蔬菜','肉','魚','蝦','蛋','豆腐','火腿','香腸','芝士','牛油','麥片','燕麥','堅果','乾果','蜂蜜','果醬','花生醬','沙律醬','芥末','胡椒粉','孜然','咖喱','八角','桂皮','花椒','辣椒','蒜','薑','蔥','洋蔥','蕃茄','薯仔','蘿蔔','白菜','菜心','生菜','菠菜','南瓜','冬瓜','翠玉瓜','茄子','青椒','紅椒','洋菇','金菇','木耳','海帶','紫菜','豆腐皮','腐竹','粉絲','米粉','河粉','烏冬','拉麵','意粉','通粉','飯','粥','湯','糖水','糖水','月餅','年糕','粽子','湯圓','餃子','包子','饅頭','燒賣','春卷','蘿蔔糕','馬蹄糕','蛋撻','曲奇','蛋卷','鳳梨酥','肉鬆','魚蛋','貢丸','牛丸','墨魚丸','蟹柳','午餐肉','腸仔','煙肉','煙三文魚','芝士片','奶油','忌廉','乳酪','奶昔','豆漿','杏仁茶','芝麻糊','核桃露','紅豆沙','綠豆沙','合桃露','杏仁露','薑汁撞奶','雙皮奶','龜苓膏','涼粉','仙草','豆花','豆腐花','布丁','布甸','果凍','啫喱','棉花糖','口香糖','香口膠','milk','bread','cookie','chocolate','candy','chip','drink','juice','soda','tea','coffee','rice','noodle','oil','sauce','vinegar','seasoning','can','frozen','ice cream','cake','fruit','vegetable','meat','fish','egg','tofu','ham','sausage','cheese','butter','cereal','oat','nut','honey','jam','peanut butter','salad dressing','mustard','pepper','cumin','curry'],
-    confidence: 0.85
-  },
-  medicine: {
-    keywords: ['藥','丸','膠囊','藥水','藥膏','藥油','藥貼','藥粉','藥片','感冒藥','退燒藥','止痛藥','胃藥','腸胃藥','過敏藥','皮膚藥','眼藥水','滴鼻液','喉糖','潤喉糖','維他命','維生素','補充劑','保健品','魚油','葉黃素','益生菌','酵素','膠原蛋白','鈣片','鐵丸','鋅片','葉酸','褪黑素','葡萄糖胺','軟骨素','冬蟲夏草','人參','花旗參','高麗參','靈芝','燕窩','雪蛤','阿膠','當歸','枸杞','紅棗','桂圓','菊花','玫瑰花','洛神花','陳皮','甘草','茯苓','薏米','蓮子','百合','雪耳','木耳','紅豆','綠豆','黑豆','黃豆','芝麻','核桃','杏仁','開心果','腰果','夏威夷果','碧根果','松子','栗子','蓮藕','馬蹄','茨實','淮山','黨參','北芪','川芎','白芍','熟地','首烏','天麻','杜仲','巴戟','肉蓯蓉','鎖陽','淫羊藿','鹿茸','鹿尾巴','海馬','海龍','花膠','鮑魚','瑤柱','蠔豉','蝦米','魚翅','海參','燕窩','蟲草','medicine','pill','capsule','syrup','ointment','cream','patch','powder','tablet','cold medicine','fever','painkiller','stomach','allergy','eye drop','nasal spray','throat lozenge','vitamin','supplement','fish oil','lutein','probiotic','enzyme','collagen','calcium','iron','zinc','folic acid','melatonin','glucosamine','chondroitin'],
-    confidence: 0.9
-  },
-  clothes: {
-    keywords: ['衫','褲','裙','外套','大衣','風衣','夾克','西裝','恤衫','T恤','衛衣','毛衣','針織','羊毛','棉質','絲綢','麻布','牛仔','皮革','羽絨','棉衣','風褸','雨衣','泳衣','內衣','內褲','胸罩','胸圍','襪','襪子','手套','圍巾','頸巾','帽','帽子','太陽帽','鴨舌帽','冷帽','貝雷帽','草帽','鞋','皮鞋','波鞋','運動鞋','涼鞋','拖鞋','高跟鞋','靴','長靴','短靴','雨靴','皮靴','帆布鞋','涼拖','人字拖','皮帶','腰帶','領帶','領結','蝴蝶結','絲巾','披肩','斗篷','圍裙','睡衣','睡袍','浴袍','家居服','運動服','瑜伽服','緊身衣','塑身衣','泳衣','比堅尼','潛水衣','滑雪服','校服','制服','工作服','圍裙','圍裙','手套','拳套','護膝','護肘','護腕','頭盔','安全帽','眼鏡','太陽眼鏡','隱形眼鏡','手錶','手鐲','手鏈','頸鏈','耳環','戒指','胸針','髮夾','髮圈','頭飾','shoes','shirt','pants','skirt','dress','coat','jacket','suit','t-shirt','sweater','knit','wool','cotton','silk','linen','denim','leather','down','raincoat','swimwear','underwear','bra','socks','gloves','scarf','hat','cap','sneakers','sandals','slippers','heels','boots','belt','tie','bow','pajamas','robe','sportswear','yoga','uniform','workwear','glasses','sunglasses','watch','bracelet','necklace','earring','ring','brooch','hair clip'],
-    confidence: 0.8
-  },
-  electronics: {
-    keywords: ['電器','電子','電腦','筆記本','平板','手機','電話','相機','攝影機','電視','電視機','顯示器','屏幕','投影機','音響','喇叭','耳機','耳筒','音箱','擴音器','電風扇','冷氣','空調','暖爐','暖氣','電熱毯','電磁爐','電飯煲','微波爐','焗爐','烤箱','多士爐','咖啡機','榨汁機','攪拌機','豆漿機','麵包機','氣炸鍋','壓力鍋','慢煮鍋','火鍋爐','電熱水壺','飲水機','淨水器','濾水器','吸塵機','吸塵器','掃地機器人','拖地機','洗衣機','乾衣機','洗碗機','雪櫃','冰箱','冰櫃','飲水機','熱水器','煤氣爐','電爐','抽油煙機','抽濕機','加濕機','空氣清新機','空氣淨化器','風扇','暖風機','電暖爐','電毯','電池','充電器','充電線','數據線','USB','HDMI','插頭','插座','拖板','延長線','電線','燈泡','燈管','LED燈','檯燈','座地燈','天花燈','射燈','筒燈','燈帶','智能燈','門鈴','監控','攝像頭','門鎖','智能鎖','感應器','遙控器','滑鼠','鼠標','鍵盤','滑鼠墊','打印機','掃描器','影印機','傳真機','碎紙機','計數機','計算機','電子秤','體重秤','血壓計','血糖機','體溫計','溫度計','鬧鐘','時鐘','計時器','定時器','電子書','閱讀器','遊戲機','Switch','PS5','Xbox','遊戲手掣','遊戲手柄','VR眼鏡','無人機','航拍機','電子煙','加濕器','滅蚊燈','捕蚊燈','電蚊拍','電子秤','體脂秤','血氧機','按摩槍','筋膜槍','電動牙刷','水牙線','剃鬚刀','鬚刨','風筒','吹風機','直髮夾','捲髮器','電動剪','鼻毛剪','指甲剪','美容儀','導入儀','蒸臉機','脫毛機','除毛機','電腦','laptop','tablet','phone','camera','tv','monitor','projector','speaker','headphone','earphone','fan','air conditioner','heater','blanket','induction','rice cooker','microwave','oven','toaster','coffee machine','juicer','blender','air fryer','pressure cooker','kettle','water dispenser','purifier','vacuum','robot','washer','dryer','dishwasher','refrigerator','fridge','freezer','water heater','stove','hood','dehumidifier','humidifier','purifier','battery','charger','cable','usb','hdmi','plug','socket','power strip','wire','bulb','lamp','led','light','bell','camera','lock','sensor','remote','mouse','keyboard','printer','scanner','shredder','calculator','scale','thermometer','alarm','clock','timer','e-reader','console','controller','vr','drone','humidifier','mosquito','massage gun','toothbrush','shaver','hair dryer','straightener','curler'],
-    confidence: 0.85
-  },
-  other: {
-    keywords: ['文具','筆','鉛筆','原子筆','鋼筆','毛筆','螢光筆','擦膠','橡皮','膠水','漿糊','膠紙','膠帶','雙面膠','白膠漿','釘書機','釘','曲別針','萬字夾','夾','文件夾','文件袋','信封','信紙','筆記本','記事本','日曆','月曆','年曆','記事貼','便利貼','標籤貼','貼紙','顏色筆','水彩','油彩','粉彩','畫筆','畫板','畫架','顏料','墨汁','硯','宣紙','卡紙','畫紙','摺紙','勞作','手工','剪刀','美工刀','界刀','刀片','尺子','間尺','圓規','量角器','三角板','計數機','計算機','書','雜誌','報紙','地圖','字典','辭典','百科全書','教科書','參考書','小說','漫畫','繪本','圖鑑','相簿','相冊','日記','帳簿','收據簿','發票簿','支票簿','名片簿','電話簿','記事簿','便條簿','草稿紙','影印紙','打印紙','傳真紙','標籤紙','貼紙','海報','banner','旗','橫額','氣球','彩帶','絲帶','花','假花','乾花','花瓶','花盆','花架','園藝','種子','泥土','肥料','殺蟲劑','除草劑','澆水壺','園藝工具','鏟','鋤','耙','剪刀','修枝剪','手套','圍裙','雨靴','帳篷','睡袋','露營','野餐','燒烤','BBQ','釣魚','魚竿','魚餌','魚網','潛水','浮潛','游泳','泳鏡','泳帽','救生衣','浮板','瑜伽墊','啞鈴','健身','運動','球','籃球','足球','排球','羽毛球','網球','乒乓球','桌球','棒球','壘球','高爾夫','保齡球','飛鏢','跳繩','呼拉圈','滑板','滾軸','單車','自行車','嬰兒車','推車','汽車','玩具','公仔','毛公仔','積木','lego','拼圖','模型','遙控','陀螺','卡牌','撲克牌','麻將','象棋','圍棋','軍棋','飛行棋','大富翁','uno','board game','party game','禮物','禮品','包裝紙','禮物袋','禮物盒','賀卡','聖誕卡','新年卡','生日卡','情人卡','蠟燭','香薰','精油','擴香','香氛','香水','化妝品','護膚品','洗面奶','潔面乳','爽膚水','精華液','乳液','面霜','眼霜','防曬','隔離霜','粉底','BB霜','CC霜','遮瑕','粉餅','碎粉','胭脂','眼影','眼線','睫毛膏','唇膏','口紅','唇彩','護唇膏','卸妝','面膜','眼膜','鼻貼','去角質','磨砂','潤膚露','body lotion','hand cream','護手霜','足膜','頸霜','胸霜','纖體','瘦身','美體','染髮劑','染髮','燙髮','護髮素','洗頭水','護髮','造型','髮泥','髮蠟','髮膠','定型','噴霧','止汗劑','除臭劑','香水','古龍水','香體露','剃毛膏','脫毛膏','化妝棉','棉花棒','牙線','牙籤','漱口水','牙膏','牙刷','毛巾','浴巾','面巾','手巾','地巾','浴袍','浴帽','浴簾','浴球','海綿','肥皂','香皂','沐浴露','洗髮水','conditioner','shampoo','body wash','hand wash','detergent','洗衣粉','洗衣液','柔順劑','漂白水','消毒水','清潔劑','清潔劑','玻璃水','地板蠟','傢俬蠟','殺蟲水','通渠劑','潔廁劑','廚房紙','廁紙','面紙','紙巾','濕紙巾','濕巾','尿片','紙尿褲','衛生巾','護墊','棉花','紗布','膠布','繃帶','紅藥水','碘酒','酒精','雙氧水','生理鹽水','退熱貼','止痛貼','萬金油','白花油','驅風油','保濟丸','整腸丸','喇叭牌','黃道益活絡油','無比滴','蚊怕水','驅蚊','防曬','stapler','tape','glue','scissors','paper','notebook','pen','pencil','book','magazine','map','dictionary','novel','comic','photo album','diary','calendar','sticky note','label','sticker','paint','brush','canvas','color','craft','ruler','calculator','toy','doll','plush','lego','puzzle','model','card','game','gift','wrap','candle','aroma','essential oil','diffuser','perfume','cosmetic','skincare','cleanser','toner','serum','lotion','cream','sunscreen','foundation','powder','blush','eyeshadow','eyeliner','mascara','lipstick','lip balm','mask','makeup remover','body lotion','hand cream','hair dye','shampoo','conditioner','styling','spray','deodorant','cotton pad','cotton swab','floss','toothpaste','towel','bathrobe','shower cap','curtain','sponge','soap','shower gel','detergent','laundry','bleach','disinfectant','cleaner','tissue','wet wipe','diaper','sanitary pad','bandage','band-aid','alcohol','sunscreen'],
-    confidence: 0.7
-  }
-};
-
-// AI 智能分類主函數
-function aiClassifyItemName(name) {
-  if (!name || typeof name !== 'string') return { category: 'other', confidence: 0 };
-
-  const lowerName = name.toLowerCase();
-  const scores = {};
-
-  for (const [catKey, rule] of Object.entries(aiCategoryRules)) {
-    let score = 0;
-    let matchedKeywords = [];
-
-    for (const keyword of rule.keywords) {
-      const lowerKeyword = keyword.toLowerCase();
-      // 完全匹配
-      if (lowerName === lowerKeyword) {
-        score += 10;
-        matchedKeywords.push(keyword);
-      }
-      // 包含關鍵字
-      else if (lowerName.includes(lowerKeyword)) {
-        // 關鍵字越長，權重越高（避免短詞誤匹配）
-        const weight = Math.min(keyword.length / 2, 5);
-        score += weight;
-        matchedKeywords.push(keyword);
-      }
-      // 關鍵字包含名稱（反向匹配）
-      else if (lowerKeyword.includes(lowerName) && lowerName.length >= 2) {
-        score += 2;
-        matchedKeywords.push(keyword);
-      }
-    }
-
-    scores[catKey] = {
-      score: score,
-      matched: matchedKeywords,
-      confidence: rule.confidence
-    };
-  }
-
-  // 找出最高分
-  let bestCat = 'other';
-  let bestScore = 0;
-
-  for (const [cat, data] of Object.entries(scores)) {
-    if (data.score > bestScore) {
-      bestScore = data.score;
-      bestCat = cat;
-    }
-  }
-
-  // 計算信心度
-  let confidence = 0;
-  if (bestScore >= 10) confidence = 0.95;
-  else if (bestScore >= 5) confidence = 0.85;
-  else if (bestScore >= 3) confidence = 0.7;
-  else if (bestScore >= 1) confidence = 0.5;
-  else confidence = 0.3;
-
-  return {
-    category: bestCat,
-    confidence: confidence,
-    score: bestScore,
-    allScores: scores
-  };
-}
-
-// 顯示 AI 分類建議
-function showAIClassificationSuggestion(name) {
-  const result = aiClassifyItemName(name);
-  const suggestionEl = document.getElementById('aiCategorySuggestion');
-
-  if (!suggestionEl) return;
-
-  if (result.confidence >= 0.5 && name.length >= 2) {
-    const cfg = categories[result.category] || categories.other;
-    const confidenceText = result.confidence >= 0.85 ? '高度確信' : 
-                           result.confidence >= 0.7 ? '很可能' : '可能是';
-
-    suggestionEl.innerHTML = 
-      '<div class="ai-suggestion-box">' +
-        '<span class="ai-suggestion-icon">🤖</span>' +
-        '<div class="ai-suggestion-content">' +
-          '<div class="ai-suggestion-text">' + confidenceText + '這是 <strong>' + cfg.icon + ' ' + cfg.label + '</strong></div>' +
-          '<div class="ai-suggestion-actions">' +
-            '<button class="ai-suggestion-btn accept" onclick="acceptAICategory(\'' + result.category + '\')">✓ 採用</button>' +
-            '<button class="ai-suggestion-btn reject" onclick="hideAISuggestion()">✕ 不用</button>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
-    suggestionEl.style.display = 'block';
-
-    // 保存建議的分類
-    window._aiSuggestedCategory = result.category;
-  } else {
-    suggestionEl.style.display = 'none';
-    window._aiSuggestedCategory = null;
-  }
-}
-
-// 採用 AI 建議的分類
-function acceptAICategory(category) {
-  selectedCategory = category;
-  updateCategorySelection();
-  hideAISuggestion();
-  showToast('🤖 已採用 AI 建議的分類');
-}
-
-// 隱藏 AI 建議
-function hideAISuggestion() {
-  const el = document.getElementById('aiCategorySuggestion');
-  if (el) el.style.display = 'none';
-  window._aiSuggestedCategory = null;
-}
-
 // ========== 條碼掃描功能 ==========
 let barcodeScanner = null;
 let isScanning = false;
 
-// 條碼資料庫查詢（Open Food Facts - 免費無需API Key）
-async function lookupBarcode(barcode) {
-  showToast('🔍 正在查詢條碼資料...');
-
+// 條碼資料庫查詢 - 多源查詢提升香港覆蓋率
+// 依序查詢：Open Food Facts → Open Beauty Facts → Open Pet Food Facts → Open Products Facts → UPC Database
+// 本地條碼快取（掃描過的條碼會保存，下次掃描即時返回）
+function getBarcodeCache() {
   try {
-    // 嘗試 Open Food Facts（食品資料庫）
-    const response = await fetch(
-      `https://world.openfoodfacts.org/api/v2/product/${barcode}.json?fields=product_name,brands,categories_tags,image_url,image_front_url,quantity,packaging,labels_tags`,
-      { method: 'GET', headers: { 'Accept': 'application/json' } }
-    );
-
-    if (!response.ok) throw new Error('API 請求失敗');
-
-    const data = await response.json();
-
-    if (data.status === 1 && data.product) {
-      const p = data.product;
-      return {
-        found: true,
-        name: p.product_name || '',
-        brand: p.brands || '',
-        category: mapFoodCategory(p.categories_tags),
-        image: p.image_url || p.image_front_url || '',
-        quantity: p.quantity || '',
-        packaging: p.packaging || '',
-        source: 'Open Food Facts'
-      };
-    }
-
-    return { found: false };
-  } catch (err) {
-    console.error('Barcode lookup error:', err);
-    return { found: false, error: err.message };
-  }
+    const cache = localStorage.getItem('hw_barcode_cache');
+    return cache ? JSON.parse(cache) : {};
+  } catch(e) { return {}; }
 }
 
-// 將 Open Food Facts 分類映射到家倉分類
+function saveBarcodeCache(cache) {
+  try {
+    localStorage.setItem('hw_barcode_cache', JSON.stringify(cache));
+  } catch(e) {}
+}
+
+function addToBarcodeCache(barcode, data) {
+  const cache = getBarcodeCache();
+  cache[barcode] = { ...data, cachedAt: Date.now() };
+  // 最多保留 200 條快取
+  const keys = Object.keys(cache);
+  if (keys.length > 200) {
+    const oldest = keys.sort((a, b) => (cache[a].cachedAt || 0) - (cache[b].cachedAt || 0))[0];
+    delete cache[oldest];
+  }
+  saveBarcodeCache(cache);
+}
+
+// 條碼資料庫查詢 - 多源查詢提升香港覆蓋率
+// 依序查詢：本地快取 → Open Food Facts → Open Beauty Facts → Open Pet Food Facts → Open Products Facts
+async function lookupBarcode(barcode) {
+  // 1. 先查本地快取
+  const cache = getBarcodeCache();
+  if (cache[barcode]) {
+    showToast('📦 從快取載入產品資料');
+    return { ...cache[barcode], fromCache: true };
+  }
+
+  showToast('🔍 正在查詢條碼資料...');
+
+  const sources = [
+    { name: 'Open Food Facts', url: `https://world.openfoodfacts.org/api/v2/product/${barcode}.json?fields=product_name,brands,categories_tags,image_url,image_front_url,quantity,packaging,labels_tags`, mapper: mapOpenFoodFacts },
+    { name: 'Open Beauty Facts', url: `https://world.openbeautyfacts.org/api/v2/product/${barcode}.json?fields=product_name,brands,categories_tags,image_url,image_front_url,quantity,packaging,labels_tags`, mapper: mapOpenBeautyFacts },
+    { name: 'Open Pet Food Facts', url: `https://world.openpetfoodfacts.org/api/v2/product/${barcode}.json?fields=product_name,brands,categories_tags,image_url,image_front_url,quantity,packaging,labels_tags`, mapper: mapOpenPetFoodFacts },
+    { name: 'Open Products Facts', url: `https://world.openproductsfacts.org/api/v2/product/${barcode}.json?fields=product_name,brands,categories_tags,image_url,image_front_url,quantity,packaging,labels_tags`, mapper: mapOpenProductsFacts }
+  ];
+
+  for (const source of sources) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6秒超時
+
+      const response = await fetch(source.url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json', 'User-Agent': 'HomeWarehouseApp/1.0' },
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      const result = source.mapper(data, barcode);
+
+      if (result && result.found) {
+        // 保存到快取
+        addToBarcodeCache(barcode, result);
+        showToast(`✅ 從 ${source.name} 找到產品`);
+        return result;
+      }
+    } catch (err) {
+      console.warn(`${source.name} 查詢失敗:`, err.message);
+      continue;
+    }
+  }
+
+  return { found: false };
+}
+
+// Open Food Facts 映射
+function mapOpenFoodFacts(data, barcode) {
+  if (data.status !== 1 || !data.product) return null;
+  const p = data.product;
+  return {
+    found: true,
+    name: p.product_name || '',
+    brand: p.brands || '',
+    category: mapFoodCategory(p.categories_tags),
+    image: p.image_url || p.image_front_url || '',
+    quantity: p.quantity || '',
+    packaging: p.packaging || '',
+    source: 'Open Food Facts'
+  };
+}
+
+// Open Beauty Facts 映射
+function mapOpenBeautyFacts(data, barcode) {
+  if (data.status !== 1 || !data.product) return null;
+  const p = data.product;
+  return {
+    found: true,
+    name: p.product_name || '',
+    brand: p.brands || '',
+    category: mapBeautyCategory(p.categories_tags),
+    image: p.image_url || p.image_front_url || '',
+    quantity: p.quantity || '',
+    packaging: p.packaging || '',
+    source: 'Open Beauty Facts'
+  };
+}
+
+// Open Pet Food Facts 映射
+function mapOpenPetFoodFacts(data, barcode) {
+  if (data.status !== 1 || !data.product) return null;
+  const p = data.product;
+  return {
+    found: true,
+    name: p.product_name || '',
+    brand: p.brands || '',
+    category: 'food',
+    image: p.image_url || p.image_front_url || '',
+    quantity: p.quantity || '',
+    packaging: p.packaging || '',
+    source: 'Open Pet Food Facts'
+  };
+}
+
+// Open Products Facts 映射
+function mapOpenProductsFacts(data, barcode) {
+  if (data.status !== 1 || !data.product) return null;
+  const p = data.product;
+  return {
+    found: true,
+    name: p.product_name || '',
+    brand: p.brands || '',
+    category: mapProductsCategory(p.categories_tags),
+    image: p.image_url || p.image_front_url || '',
+    quantity: p.quantity || '',
+    packaging: p.packaging || '',
+    source: 'Open Products Facts'
+  };
+}
+
+// 食品分類映射
 function mapFoodCategory(categories) {
   if (!categories || !Array.isArray(categories)) return 'food';
-
   const cats = categories.map(c => c.toLowerCase());
-
-  if (cats.some(c => c.includes('beverage') || c.includes('drink') || c.includes('juice') || c.includes('milk') || c.includes('water'))) return 'food';
   if (cats.some(c => c.includes('medicine') || c.includes('drug') || c.includes('pharmaceutical') || c.includes('vitamin') || c.includes('supplement'))) return 'medicine';
   if (cats.some(c => c.includes('electronics') || c.includes('appliance') || c.includes('device'))) return 'electronics';
   if (cats.some(c => c.includes('clothing') || c.includes('apparel') || c.includes('fashion') || c.includes('textile'))) return 'clothes';
-
   return 'food';
+}
+
+// 美容/護膚分類映射
+function mapBeautyCategory(categories) {
+  if (!categories || !Array.isArray(categories)) return 'other';
+  const cats = categories.map(c => c.toLowerCase());
+  if (cats.some(c => c.includes('medicine') || c.includes('drug') || c.includes('pharmaceutical'))) return 'medicine';
+  return 'other';
+}
+
+// 一般產品分類映射
+function mapProductsCategory(categories) {
+  if (!categories || !Array.isArray(categories)) return 'other';
+  const cats = categories.map(c => c.toLowerCase());
+  if (cats.some(c => c.includes('food') || c.includes('beverage') || c.includes('drink'))) return 'food';
+  if (cats.some(c => c.includes('medicine') || c.includes('drug') || c.includes('pharmaceutical'))) return 'medicine';
+  if (cats.some(c => c.includes('electronics') || c.includes('appliance') || c.includes('device'))) return 'electronics';
+  if (cats.some(c => c.includes('clothing') || c.includes('apparel') || c.includes('fashion') || c.includes('textile'))) return 'clothes';
+  return 'other';
 }
 
 // 打開條碼掃描器
@@ -1723,11 +1742,12 @@ async function lookupAndFill(barcode) {
     html += '<div class="barcode-product-name">' + escapeHtml(data.name) + '</div>';
     if (data.brand) html += '<div class="barcode-product-brand">' + escapeHtml(data.brand) + '</div>';
     if (data.quantity) html += '<div class="barcode-product-qty">規格：' + escapeHtml(data.quantity) + '</div>';
-    html += '<div class="barcode-product-source">資料來源：' + data.source + '</div>';
+    if (data.fromCache) html += '<div class="barcode-product-source">📦 來自本地快取</div>';
+    else html += '<div class="barcode-product-source">資料來源：' + data.source + '</div>';
     html += '</div></div>';
 
     html += '<div style="display:flex;gap:10px;margin-top:16px">';
-    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAdd(\'' + barcode + '\', \'' + escapeHtml(data.name).replace(/'/g, "\\'") + '\', \'' + data.category + '\', \'' + (data.image || '') + '\', \'' + escapeHtml(data.quantity || '').replace(/'/g, "\\'") + '\')">✅ 確認入倉</button>';
+    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAdd('' + barcode + '', '' + escapeHtml(data.name).replace(/'/g, "\'") + '', '' + data.category + '', '' + (data.image || '') + '', '' + escapeHtml(data.quantity || '').replace(/'/g, "\'") + '')">✅ 確認入倉</button>';
     html += '<button class="btn" style="flex:1" onclick="retryBarcodeScan()">🔄 重新掃描</button>';
     html += '</div>';
 
@@ -1743,17 +1763,63 @@ async function lookupAndFill(barcode) {
       brand: data.brand
     };
   } else {
+    // 產品未找到 - 提供更好的 UX，讓用戶直接輸入名稱
     let html = '<div style="text-align:center;padding:20px">';
     html += '<div style="font-size:48px;margin-bottom:12px">😕</div>';
-    html += '<div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:8px">找不到此產品資料</div>';
-    html += '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px">條碼：' + barcode + '</div>';
+    html += '<div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:8px">資料庫中暫無此產品</div>';
+    html += '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px">條碼：' + barcode + '<br>您可以手動輸入產品名稱後入倉</div>';
+
+    // 輸入名稱的欄位
+    html += '<div style="margin-bottom:12px;">';
+    html += '<input id="manualProductName" class="form-input" type="text" placeholder="輸入產品名稱（例如：維他檸檬茶）" style="text-align:center;">';
+    html += '</div>';
+
     html += '<div style="display:flex;gap:10px">';
-    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAdd(\'' + barcode + '\', \'\', \'food\', \'\', \'\')">➕ 手動新增</button>';
+    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAddWithName('' + barcode + '')">➕ 入倉</button>';
     html += '<button class="btn" style="flex:1" onclick="retryBarcodeScan()">🔄 重新掃描</button>';
     html += '</div></div>';
 
     resultContent.innerHTML = html;
+
+    // 聚焦到輸入框
+    setTimeout(() => {
+      const input = document.getElementById('manualProductName');
+      if (input) input.focus();
+    }, 100);
   }
+}
+
+// 用戶手動輸入名稱後入倉
+function confirmBarcodeAddWithName(barcode) {
+  const nameInput = document.getElementById('manualProductName');
+  const name = nameInput ? nameInput.value.trim() : '';
+
+  // 關閉掃描器
+  closeBarcodeScanner();
+
+  // 打開新增物品彈窗
+  openAddModal();
+
+  // 填充資料
+  if (name) document.getElementById('itemName').value = name;
+
+  // 嘗試 AI 分類（基於名稱）
+  if (name) {
+    // 簡單關鍵字分類
+    const lowerName = name.toLowerCase();
+    if (lowerName.includes('藥') || lowerName.includes('丸') || lowerName.includes('膠囊')) selectedCategory = 'medicine';
+    else if (lowerName.includes('衫') || lowerName.includes('褲') || lowerName.includes('衣服')) selectedCategory = 'clothes';
+    else if (lowerName.includes('電') || lowerName.includes('機') || lowerName.includes('器')) selectedCategory = 'electronics';
+    else if (lowerName.includes('餅') || lowerName.includes('糖') || lowerName.includes('飲') || lowerName.includes('茶') || lowerName.includes('水') || lowerName.includes('奶')) selectedCategory = 'food';
+    updateCategorySelection();
+  }
+
+  // 在備註中添加條碼資訊
+  const noteEl = document.getElementById('itemNote');
+  const barcodeNote = '條碼：' + barcode;
+  noteEl.value = barcodeNote;
+
+  showToast('📦 請輸入產品資料後儲存');
 }
 
 // 重新掃描
@@ -1805,11 +1871,10 @@ function confirmBarcodeAdd(barcode, name, category, image, quantity) {
   const noteEl = document.getElementById('itemNote');
   const existingNote = noteEl.value;
   const barcodeNote = '條碼：' + barcode;
-  noteEl.value = existingNote ? existingNote + '\\n' + barcodeNote : barcodeNote;
+  noteEl.value = existingNote ? existingNote + '\n' + barcodeNote : barcodeNote;
 
   showToast('📦 已帶入條碼資料，請確認後儲存');
 }
-
 // ========== PWA ==========
 function setupInstallPrompt() {
   window.addEventListener('beforeinstallprompt', (e) => {
