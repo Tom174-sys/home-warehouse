@@ -839,8 +839,17 @@
   </div>
 
 
-  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
   <script src="app.js"></script>
+
+  <script>
+    window.addEventListener('error', function(e) {
+      console.error('全局錯誤:', e.message, 'at', e.filename, 'line', e.lineno);
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      console.error('未處理的 Promise 錯誤:', e.reason);
+    });
+  </script>
 </body>
 </html>

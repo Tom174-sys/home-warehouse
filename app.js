@@ -1805,7 +1805,7 @@ async function lookupAndFill(barcode) {
     html += '</div></div>';
 
     html += '<div style="display:flex;gap:10px;margin-top:16px">';
-    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAdd('' + barcode + '', '' + escapeHtml(data.name).replace(/'/g, "\'") + '', '' + data.category + '', '' + (data.image || '') + '', '' + escapeHtml(data.quantity || '').replace(/'/g, "\'") + '')">✅ 確認入倉</button>';
+    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAdd(\'' + barcode + '\', \'' + escapeHtml(data.name).replace(/'/g, "\'") + '\', \'' + data.category + '\', \'' + (data.image || '') + '\', \'' + escapeHtml(data.quantity || '').replace(/'/g, "\'") + '\')">✅ 確認入倉</button>';
     html += '<button class="btn" style="flex:1" onclick="retryBarcodeScan()">🔄 重新掃描</button>';
     html += '</div>';
 
@@ -1833,7 +1833,7 @@ async function lookupAndFill(barcode) {
     html += '</div>';
 
     html += '<div style="display:flex;gap:10px">';
-    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAddWithName('' + barcode + '')">➕ 入倉</button>';
+    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAddWithName(\'' + barcode + '\')">➕ 入倉</button>';
     html += '<button class="btn" style="flex:1" onclick="retryBarcodeScan()">🔄 重新掃描</button>';
     html += '</div></div>';
 
