@@ -3,7 +3,8 @@
 
 let items = [];
 let outHistory = [];
-let actionHistory = [];  // 操作歷史：入倉、出倉、編輯、刪除、數量變更
+let actionHistory = [];
+let priceHistory = {};  // 操作歷史：入倉、出倉、編輯、刪除、數量變更
 let categories = {};
 let currentFilter = 'all';
 let editingId = null;
@@ -121,17 +122,8 @@ function initFirebase() {
           else outHistory = [];
           if (data.actionHistory) actionHistory = data.actionHistory;
           else actionHistory = [];
-
-          // 向後兼容：為舊資料補上 priceHistory
-          items.forEach(item => {
-            if (!item.priceHistory && item.price !== null && item.price !== undefined) {
-              item.priceHistory = [{
-                price: item.price,
-                date: item.added || item.buyDate || getTodayHK(),
-                qty: item.qty || 1
-              }];
-            }
-          });
+          if (data.priceHistory) priceHistory = data.priceHistory;
+          else priceHistory = {};
 
           saveToLocal();
         }
@@ -268,6 +260,7 @@ function saveToCloud() {
     items: items,
     outHistory: outHistory,
     actionHistory: actionHistory,
+    priceHistory: priceHistory,
     lastUpdate: now
   }).then(() => {
     updateSyncStatus('online');
@@ -283,6 +276,7 @@ function saveToLocal() {
   localStorage.setItem('hw_items_v3', JSON.stringify(items));
   localStorage.setItem('hw_outHistory_v3', JSON.stringify(outHistory));
   localStorage.setItem('hw_actionHistory_v3', JSON.stringify(actionHistory));
+  localStorage.setItem('hw_priceHistory_v3', JSON.stringify(priceHistory));
 }
 
 function loadFromLocal() {
@@ -290,21 +284,12 @@ function loadFromLocal() {
   const itemSaved = localStorage.getItem('hw_items_v3');
   const histSaved = localStorage.getItem('hw_outHistory_v3');
   const actionSaved = localStorage.getItem('hw_actionHistory_v3');
+  const priceHistSaved = localStorage.getItem('hw_priceHistory_v3');
   if (catSaved) { try { categories = JSON.parse(catSaved); } catch(e) {} }
   if (itemSaved) { try { items = JSON.parse(itemSaved); } catch(e) {} }
   if (histSaved) { try { outHistory = JSON.parse(histSaved); } catch(e) {} }
   if (actionSaved) { try { actionHistory = JSON.parse(actionSaved); } catch(e) {} }
-
-  // 向後兼容：為舊資料補上 priceHistory
-  items.forEach(item => {
-    if (!item.priceHistory && item.price !== null && item.price !== undefined) {
-      item.priceHistory = [{
-        price: item.price,
-        date: item.added || item.buyDate || getTodayHK(),
-        qty: item.qty || 1
-      }];
-    }
-  });
+  if (priceHistSaved) { try { priceHistory = JSON.parse(priceHistSaved); } catch(e) {} }
 
   renderCategoryTabs();
   renderCategorySelects();
@@ -852,40 +837,19 @@ function saveItem() {
   const existingItem = isEditing ? items.find(i => i.id === editingId) : null;
 
   const priceVal = document.getElementById('itemPrice').value.trim();
-  const newPrice = priceVal ? parseFloat(priceVal) : null;
-
-  // 價格歷史記錄
-  let priceHistory = [];
-  if (existingItem && existingItem.priceHistory) {
-    priceHistory = [...existingItem.priceHistory];
-  }
-  // 如果價格有變化，記錄新價格
-  if (newPrice !== null && (!existingItem || existingItem.price !== newPrice)) {
-    priceHistory.push({
-      price: newPrice,
-      date: getTodayHK(),
-      qty: parseInt(document.getElementById('itemQty').value) || 1
-    });
-    // 最多保留 50 條記錄
-    if (priceHistory.length > 50) {
-      priceHistory = priceHistory.slice(-50);
-    }
-  }
-
   const item = {
     id: editingId || Date.now(),
     name: name,
     category: selectedCategory,
     qty: parseInt(document.getElementById('itemQty').value) || 1,
     unit: document.getElementById('itemUnit').value.trim() || '個',
-    price: newPrice,
+    price: priceVal ? parseFloat(priceVal) : null,
     location: document.getElementById('itemLocation').value.trim() || '未指定',
     buyDate: document.getElementById('itemBuyDate').value,
     expiry: document.getElementById('itemExpiry').value,
     note: document.getElementById('itemNote').value.trim(),
     image: currentImageData || (existingItem ? existingItem.image || '' : ''),
-    added: existingItem ? existingItem.added || getTodayHK() : getTodayHK(),
-    priceHistory: priceHistory
+    added: existingItem ? existingItem.added || getTodayHK() : getTodayHK()
   };
 
   if (isEditing) {
@@ -893,6 +857,21 @@ function saveItem() {
     if (idx >= 0) items[idx] = item;
   } else {
     items.push(item);
+    // 入倉時記錄價格歷史（按產品名稱分組）
+    if (item.price && item.price > 0) {
+      const key = item.name.trim();
+      if (!priceHistory[key]) priceHistory[key] = [];
+      priceHistory[key].push({
+        price: item.price,
+        date: getTodayHK(),
+        qty: item.qty,
+        unit: item.unit,
+        location: item.location
+      });
+      if (priceHistory[key].length > 100) {
+        priceHistory[key] = priceHistory[key].slice(-100);
+      }
+    }
   }
 
   saveToCloud();
@@ -985,92 +964,6 @@ function openDetail(id) {
   }
 
   document.getElementById('detailNote').textContent = item.note || '暫無備註';
-
-  // 價格歷史顯示
-  const priceHistoryEl = document.getElementById('detailPriceHistory');
-  if (item.priceHistory && item.priceHistory.length > 0) {
-    let phHtml = '<div style="margin-top:16px;">';
-    phHtml += '<div style="font-size:13px;font-weight:700;color:var(--text-secondary);margin-bottom:10px;">📈 價格變動歷史</div>';
-    phHtml += '<div style="display:flex;flex-direction:column;gap:6px;">';
-
-    // 計算平均價格和趨勢
-    const prices = item.priceHistory.map(h => h.price);
-    const avgPrice = prices.reduce((a,b) => a+b, 0) / prices.length;
-    const minPrice = Math.min(...prices);
-    const maxPrice = Math.max(...prices);
-    const latestPrice = prices[prices.length - 1];
-    const prevPrice = prices.length > 1 ? prices[prices.length - 2] : latestPrice;
-    const trend = latestPrice > prevPrice ? '📈' : latestPrice < prevPrice ? '📉' : '➡️';
-    const trendColor = latestPrice > prevPrice ? '#C45B4B' : latestPrice < prevPrice ? '#5A8E6E' : '#A39E98';
-
-    phHtml += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;font-size:12px;color:var(--text-muted);">';
-    phHtml += '<span>平均: <strong style="color:var(--text-primary);">$' + avgPrice.toFixed(2) + '</strong></span>';
-    phHtml += '<span>最低: <strong style="color:#5A8E6E;">$' + minPrice.toFixed(2) + '</strong></span>';
-    phHtml += '<span>最高: <strong style="color:#C45B4B;">$' + maxPrice.toFixed(2) + '</strong></span>';
-    phHtml += '<span>趨勢: <strong style="color:' + trendColor + ';">' + trend + '</strong></span>';
-    phHtml += '</div>';
-
-    // 價格走勢圖（簡易條形圖）
-    const maxBarPrice = Math.max(...prices) * 1.1;
-    phHtml += '<div style="display:flex;align-items:flex-end;gap:3px;height:60px;padding:8px;background:var(--bg-elevated);border-radius:10px;border:1.5px solid var(--border);margin-bottom:8px;">';
-    item.priceHistory.forEach((h, idx) => {
-      const barHeight = maxBarPrice > 0 ? (h.price / maxBarPrice * 50) : 5;
-      const isLatest = idx === item.priceHistory.length - 1;
-      const barColor = isLatest ? 'linear-gradient(to top, #B8860B, #C45B4B)' : '#D4C4A8';
-      phHtml += '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:28px;">';
-      phHtml += '<div style="font-size:9px;color:var(--text-muted);white-space:nowrap;">' + h.date.slice(5) + '</div>';
-      phHtml += '<div style="width:100%;height:' + barHeight + 'px;background:' + barColor + ';border-radius:3px ' + (isLatest ? '3px 3px 3px' : '3px 3px 0 0') + ';position:relative;" title="$' + h.price.toFixed(2) + ' (' + h.qty + ' ' + item.unit + ')">';
-      if (isLatest) {
-        phHtml += '<div style="position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:10px;font-weight:700;color:#B8860B;white-space:nowrap;">$' + h.price.toFixed(0) + '</div>';
-      }
-      phHtml += '</div>';
-      phHtml += '</div>';
-    });
-    phHtml += '</div>';
-
-    // 歷史記錄列表
-    phHtml += '<div style="max-height:120px;overflow-y:auto;">';
-    [...item.priceHistory].reverse().forEach((h, idx) => {
-      const prev = item.priceHistory[item.priceHistory.length - idx - 2];
-      let changeStr = '';
-      let changeColor = '';
-      if (prev) {
-        const diff = h.price - prev.price;
-        const pct = ((diff / prev.price) * 100).toFixed(1);
-        if (diff > 0) {
-          changeStr = ' 漲 ' + pct + '%';
-          changeColor = '#C45B4B';
-        } else if (diff < 0) {
-          changeStr = ' 跌 ' + Math.abs(pct) + '%';
-          changeColor = '#5A8E6E';
-        } else {
-          changeStr = ' 持平';
-          changeColor = '#A39E98';
-        }
-      }
-      phHtml += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:' + (idx === 0 ? 'var(--accent-soft)' : 'var(--bg-elevated)') + ';border-radius:8px;margin-bottom:4px;border:1.5px solid ' + (idx === 0 ? 'var(--accent-light)' : 'var(--border)') + ';">';
-      phHtml += '<div style="display:flex;align-items:center;gap:8px;">';
-      phHtml += '<span style="font-size:11px;color:var(--text-muted);">' + h.date + '</span>';
-      phHtml += '<span style="font-size:12px;color:var(--text-secondary);">' + h.qty + ' ' + escapeHtml(item.unit) + '</span>';
-      phHtml += '</div>';
-      phHtml += '<div style="display:flex;align-items:center;gap:6px;">';
-      phHtml += '<span style="font-size:14px;font-weight:700;color:var(--text-primary);">$' + h.price.toFixed(2) + '</span>';
-      if (changeStr) {
-        phHtml += '<span style="font-size:11px;font-weight:600;color:' + changeColor + ';background:' + changeColor + '15;padding:2px 6px;border-radius:6px;">' + changeStr + '</span>';
-      }
-      phHtml += '</div>';
-      phHtml += '</div>';
-    });
-    phHtml += '</div>';
-
-    phHtml += '</div></div>';
-    priceHistoryEl.innerHTML = phHtml;
-    priceHistoryEl.style.display = 'block';
-  } else {
-    priceHistoryEl.innerHTML = '';
-    priceHistoryEl.style.display = 'none';
-  }
-
   document.getElementById('detailModal').classList.add('show');
 }
 
@@ -1167,6 +1060,22 @@ function doOut() {
       outId: Date.now()
     });
     if (outHistory.length > 200) outHistory = outHistory.slice(0, 200);
+    // 出倉時也記錄價格歷史
+    if (item.price && item.price > 0) {
+      const key = item.name.trim();
+      if (!priceHistory[key]) priceHistory[key] = [];
+      priceHistory[key].push({
+        price: item.price,
+        date: getTodayHK(),
+        qty: item.qty,
+        unit: item.unit,
+        location: item.location,
+        action: 'out'
+      });
+      if (priceHistory[key].length > 100) {
+        priceHistory[key] = priceHistory[key].slice(-100);
+      }
+    }
   }
 
   items = items.filter(i => i.id !== outItemId);
@@ -1525,78 +1434,302 @@ function showCalendarDayDetail(day, actions) {
 
 
 
+// ========== 產品價格趨勢分析 ==========
+let currentPriceTrendProduct = null;
 
-// ========== 價格趨勢分析 ==========
 function openPriceTrendModal() {
-  renderPriceTrend();
-  document.getElementById('priceTrendModal').classList.add('show');
+  renderPriceTrendProductList();
+  document.getElementById("priceTrendModal").classList.add("show");
 }
 
 function closePriceTrendModal() {
-  document.getElementById('priceTrendModal').classList.remove('show');
+  document.getElementById("priceTrendModal").classList.remove("show");
+  currentPriceTrendProduct = null;
 }
 
-function renderPriceTrend() {
-  const list = document.getElementById('priceTrendList');
-  const empty = document.getElementById('priceTrendEmpty');
+function renderPriceTrendProductList() {
+  const list = document.getElementById("priceTrendList");
+  const empty = document.getElementById("priceTrendEmpty");
 
-  // 收集所有有價格歷史的物品
-  const itemsWithHistory = items.filter(i => i.priceHistory && i.priceHistory.length > 1);
+  const products = Object.keys(priceHistory).filter(function(k) {
+    return priceHistory[k] && priceHistory[k].length > 0;
+  });
 
-  if (itemsWithHistory.length === 0) {
-    list.innerHTML = '';
-    empty.style.display = 'block';
-    document.getElementById('priceTrendCount').textContent = '0 件物品有價格記錄';
+  if (products.length === 0) {
+    list.innerHTML = "";
+    empty.style.display = "block";
+    document.getElementById("priceTrendCount").textContent = "0 個產品有價格記錄";
     return;
   }
 
-  empty.style.display = 'none';
-  document.getElementById('priceTrendCount').textContent = itemsWithHistory.length + ' 件物品有價格記錄';
+  empty.style.display = "none";
+  document.getElementById("priceTrendCount").textContent = products.length + " 個產品有價格記錄";
 
-  list.innerHTML = itemsWithHistory.map(item => {
-    const cfg = categories[item.category] || categories.other;
-    const prices = item.priceHistory.map(h => h.price);
-    const avg = prices.reduce((a,b) => a+b, 0) / prices.length;
-    const min = Math.min(...prices);
-    const max = Math.max(...prices);
+  list.innerHTML = products.map(function(name) {
+    const history = priceHistory[name];
+    const prices = history.map(function(h) { return h.price; });
     const latest = prices[prices.length - 1];
     const first = prices[0];
-    const totalChange = ((latest - first) / first * 100).toFixed(1);
-    const trendIcon = totalChange > 0 ? '📈' : totalChange < 0 ? '📉' : '➡️';
-    const trendColor = totalChange > 0 ? '#C45B4B' : totalChange < 0 ? '#5A8E6E' : '#A39E98';
+    const min = Math.min.apply(null, prices);
+    const max = Math.max.apply(null, prices);
+    const avg = prices.reduce(function(a,b) { return a+b; }, 0) / prices.length;
+    const totalChange = first > 0 ? ((latest - first) / first * 100).toFixed(1) : "0.0";
+    const trendIcon = totalChange > 0 ? "📈" : totalChange < 0 ? "📉" : "➡️";
+    const trendColor = totalChange > 0 ? "#C45B4B" : totalChange < 0 ? "#5A8E6E" : "#A39E98";
 
-    // 簡易走勢線 (用 Unicode 字符)
-    let sparkline = '';
-    const normalized = prices.map(p => (p - min) / (max - min || 1));
-    const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    normalized.forEach(n => {
+    var sparkline = "";
+    const normalized = prices.map(function(p) { return (p - min) / (max - min || 1); });
+    const chars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    normalized.forEach(function(n) {
       sparkline += chars[Math.min(Math.floor(n * 7), 7)];
     });
 
-    return '<div class="price-trend-item" style="background:var(--bg-card);border-radius:var(--radius-md);padding:16px;margin-bottom:12px;border:1.5px solid var(--border);">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
-        '<div style="display:flex;align-items:center;gap:10px;">' +
-          '<span style="font-size:24px;">' + cfg.icon + '</span>' +
-          '<div>' +
-            '<div style="font-size:16px;font-weight:700;color:var(--text-primary);">' + escapeHtml(item.name) + '</div>' +
-            '<div style="font-size:12px;color:var(--text-muted);">' + item.priceHistory.length + ' 次價格記錄</div>' +
-          '</div>' +
-        '</div>' +
-        '<div style="text-align:right;">' +
-          '<div style="font-size:20px;font-weight:800;color:' + trendColor + ';">' + trendIcon + ' ' + (totalChange > 0 ? '+' : '') + totalChange + '%</div>' +
-          '<div style="font-size:12px;color:var(--text-muted);">總變動</div>' +
-        '</div>' +
-      '</div>' +
-      '<div style="display:flex;gap:16px;margin-bottom:10px;font-size:12px;">' +
-        '<span style="color:var(--text-secondary);">首次: <strong>$' + first.toFixed(2) + '</strong></span>' +
-        '<span style="color:var(--text-secondary);">最新: <strong style="color:' + trendColor + ';">$' + latest.toFixed(2) + '</strong></span>' +
-        '<span style="color:var(--text-secondary);">平均: <strong>$' + avg.toFixed(2) + '</strong></span>' +
-        '<span style="color:var(--text-secondary);">最低: <strong style="color:#5A8E6E;">$' + min.toFixed(2) + '</strong></span>' +
-        '<span style="color:var(--text-secondary);">最高: <strong style="color:#C45B4B;">$' + max.toFixed(2) + '</strong></span>' +
-      '</div>' +
-      '<div style="font-size:18px;color:var(--accent);letter-spacing:1px;text-align:center;padding:8px;background:var(--bg-elevated);border-radius:8px;font-family:monospace;">' + sparkline + '</div>' +
-    '</div>';
-  }).join('');
+    return "<div class="price-trend-item" onclick="openProductPriceChart(&#39;" + name.replace(/'/g, "\&#39;") + "&#39;)" style="background:var(--bg-card);border-radius:var(--radius-md);padding:16px;margin-bottom:12px;border:1.5px solid var(--border);cursor:pointer;transition:all 0.2s;">" +
+      "<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">" +
+        "<div>" +
+          "<div style="font-size:16px;font-weight:700;color:var(--text-primary);">" + escapeHtml(name) + "</div>" +
+          "<div style="font-size:12px;color:var(--text-muted);">" + history.length + " 次價格記錄</div>" +
+        "</div>" +
+        "<div style="text-align:right;">" +
+          "<div style="font-size:20px;font-weight:800;color:" + trendColor + ";">" + trendIcon + " " + (totalChange > 0 ? "+" : "") + totalChange + "%</div>" +
+          "<div style="font-size:12px;color:var(--text-muted);">總變動</div>" +
+        "</div>" +
+      "</div>" +
+      "<div style="display:flex;gap:16px;margin-bottom:10px;font-size:12px;">" +
+        "<span style="color:var(--text-secondary);">首次: <strong>$" + first.toFixed(2) + "</strong></span>" +
+        "<span style="color:var(--text-secondary);">最新: <strong style="color:" + trendColor + ";">$" + latest.toFixed(2) + "</strong></span>" +
+        "<span style="color:var(--text-secondary);">平均: <strong>$" + avg.toFixed(2) + "</strong></span>" +
+        "<span style="color:var(--text-secondary);">最低: <strong style="color:#5A8E6E;">$" + min.toFixed(2) + "</strong></span>" +
+        "<span style="color:var(--text-secondary);">最高: <strong style="color:#C45B4B;">$" + max.toFixed(2) + "</strong></span>" +
+      "</div>" +
+      "<div style="font-size:18px;color:var(--accent);letter-spacing:1px;text-align:center;padding:8px;background:var(--bg-elevated);border-radius:8px;font-family:monospace;">" + sparkline + "</div>" +
+    "</div>";
+  }).join("");
+}
+
+function openProductPriceChart(productName) {
+  currentPriceTrendProduct = productName;
+  const history = priceHistory[productName] || [];
+
+  if (history.length === 0) return;
+
+  const prices = history.map(function(h) { return h.price; });
+  const min = Math.min.apply(null, prices);
+  const max = Math.max.apply(null, prices);
+  const range = max - min || 1;
+
+  const width = 340;
+  const height = 200;
+  const padding = 30;
+  const chartW = width - padding * 2;
+  const chartH = height - padding * 2;
+
+  var pathD = "";
+  var points = "";
+  const stepX = chartW / (prices.length - 1 || 1);
+
+  prices.forEach(function(p, i) {
+    const x = padding + i * stepX;
+    const y = padding + chartH - ((p - min) / range * chartH);
+    if (i === 0) pathD += "M " + x + " " + y;
+    else pathD += " L " + x + " " + y;
+    points += "<circle cx="" + x + "" cy="" + y + "" r="4" fill="#B8860B" stroke="white" stroke-width="2"/>";
+    points += "<text x="" + x + "" y="" + (y - 10) + "" text-anchor="middle" font-size="10" fill="#2C2A26" font-weight="600">$" + p.toFixed(0) + "</text>";
+  });
+
+  var tableHtml = "<table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:12px;">";
+  tableHtml += "<thead><tr style="background:var(--bg-warm);"><th style="padding:8px;text-align:left;border:1px solid var(--border);">日期</th><th style="padding:8px;text-align:right;border:1px solid var(--border);">價格</th><th style="padding:8px;text-align:right;border:1px solid var(--border);">數量</th><th style="padding:8px;text-align:left;border:1px solid var(--border);">位置</th></tr></thead><tbody>";
+  history.slice().reverse().forEach(function(h, i) {
+    tableHtml += "<tr style="background:" + (i % 2 === 0 ? "var(--bg-card)" : "var(--bg-elevated)") + ";">";
+    tableHtml += "<td style="padding:8px;border:1px solid var(--border);">" + h.date + "</td>";
+    tableHtml += "<td style="padding:8px;text-align:right;border:1px solid var(--border);font-weight:700;">$" + h.price.toFixed(2) + "</td>";
+    tableHtml += "<td style="padding:8px;text-align:right;border:1px solid var(--border);">" + h.qty + " " + escapeHtml(h.unit || "個") + "</td>";
+    tableHtml += "<td style="padding:8px;border:1px solid var(--border);">" + escapeHtml(h.location || "") + (h.action === "out" ? " <span style="color:#C45B4B;font-size:11px;">(出倉)</span>" : "") + "</td>";
+    tableHtml += "</tr>";
+  });
+  tableHtml += "</tbody></table>";
+
+  const modalHtml = "<div id="productPriceChartOverlay" class="history-overlay show" onclick="if(event.target===this)closeProductPriceChart()">" +
+    "<div class="history-content" style="max-height:92vh;max-width:420px;">" +
+      "<div class="history-header">" +
+        "<h3 class="history-title">📈 " + escapeHtml(productName) + " 價格走勢</h3>" +
+        "<button class="modal-close" onclick="closeProductPriceChart()">×</button>" +
+      "</div>" +
+      "<div style="margin-bottom:16px;">" +
+        "<svg width="" + width + "" height="" + height + "" style="background:var(--bg-elevated);border-radius:12px;border:1.5px solid var(--border);">" +
+          "<defs><linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(184,134,11,0.2)"/><stop offset="100%" stop-color="rgba(184,134,11,0)"/></linearGradient></defs>" +
+          "<path d="" + pathD + " L " + (padding + chartW) + " " + (padding + chartH) + " L " + padding + " " + (padding + chartH) + " Z" fill="url(#priceGrad)"/>" +
+          "<path d="" + pathD + "" fill="none" stroke="#B8860B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>" +
+          points +
+        "</svg>" +
+      "</div>" +
+      "<div style="display:flex;gap:12px;justify-content:center;margin-bottom:16px;font-size:12px;">" +
+        "<span style="background:var(--success-soft);color:#5A8E6E;padding:4px 12px;border-radius:8px;font-weight:600;">最低: $" + min.toFixed(2) + "</span>" +
+        "<span style="background:var(--danger-soft);color:#C45B4B;padding:4px 12px;border-radius:8px;font-weight:600;">最高: $" + max.toFixed(2) + "</span>" +
+        "<span style="background:var(--accent-soft);color:#B8860B;padding:4px 12px;border-radius:8px;font-weight:600;">平均: $" + (prices.reduce(function(a,b){return a+b;},0)/prices.length).toFixed(2) + "</span>" +
+      "</div>" +
+      tableHtml +
+    "</div>" +
+  "</div>";
+
+  var old = document.getElementById("productPriceChartOverlay");
+  if (old) old.remove();
+
+  document.body.insertAdjacentHTML("beforeend", modalHtml);
+}
+
+function closeProductPriceChart() {
+  var overlay = document.getElementById("productPriceChartOverlay");
+  if (overlay) overlay.remove();
+}
+
+// ========== 產品價格趨勢分析 ==========
+let currentPriceTrendProduct = null;
+
+function openPriceTrendModal() {
+  renderPriceTrendProductList();
+  document.getElementById("priceTrendModal").classList.add("show");
+}
+
+function closePriceTrendModal() {
+  document.getElementById("priceTrendModal").classList.remove("show");
+  currentPriceTrendProduct = null;
+}
+
+function renderPriceTrendProductList() {
+  const list = document.getElementById("priceTrendList");
+  const empty = document.getElementById("priceTrendEmpty");
+
+  const products = Object.keys(priceHistory).filter(function(k) {
+    return priceHistory[k] && priceHistory[k].length > 0;
+  });
+
+  if (products.length === 0) {
+    list.innerHTML = "";
+    empty.style.display = "block";
+    document.getElementById("priceTrendCount").textContent = "0 個產品有價格記錄";
+    return;
+  }
+
+  empty.style.display = "none";
+  document.getElementById("priceTrendCount").textContent = products.length + " 個產品有價格記錄";
+
+  list.innerHTML = products.map(function(name) {
+    const history = priceHistory[name];
+    const prices = history.map(function(h) { return h.price; });
+    const latest = prices[prices.length - 1];
+    const first = prices[0];
+    const min = Math.min.apply(null, prices);
+    const max = Math.max.apply(null, prices);
+    const avg = prices.reduce(function(a,b) { return a+b; }, 0) / prices.length;
+    const totalChange = first > 0 ? ((latest - first) / first * 100).toFixed(1) : "0.0";
+    const trendIcon = totalChange > 0 ? "📈" : totalChange < 0 ? "📉" : "➡️";
+    const trendColor = totalChange > 0 ? "#C45B4B" : totalChange < 0 ? "#5A8E6E" : "#A39E98";
+
+    var sparkline = "";
+    const normalized = prices.map(function(p) { return (p - min) / (max - min || 1); });
+    const chars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    normalized.forEach(function(n) {
+      sparkline += chars[Math.min(Math.floor(n * 7), 7)];
+    });
+
+    return "<div class=\"price-trend-item\" onclick=\"openProductPriceChart(\'" + name.replace(/'/g, "\\'") + "\')\" style=\"background:var(--bg-card);border-radius:var(--radius-md);padding:16px;margin-bottom:12px;border:1.5px solid var(--border);cursor:pointer;transition:all 0.2s;\">" +
+      "<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;\">" +
+        "<div>" +
+          "<div style=\"font-size:16px;font-weight:700;color:var(--text-primary);\">" + escapeHtml(name) + "</div>" +
+          "<div style=\"font-size:12px;color:var(--text-muted);\">" + history.length + " 次價格記錄</div>" +
+        "</div>" +
+        "<div style=\"text-align:right;\">" +
+          "<div style=\"font-size:20px;font-weight:800;color:" + trendColor + ";\">" + trendIcon + " " + (totalChange > 0 ? "+" : "") + totalChange + "%</div>" +
+          "<div style=\"font-size:12px;color:var(--text-muted);\">總變動</div>" +
+        "</div>" +
+      "</div>" +
+      "<div style=\"display:flex;gap:16px;margin-bottom:10px;font-size:12px;\">" +
+        "<span style=\"color:var(--text-secondary);\">首次: <strong>$" + first.toFixed(2) + "</strong></span>" +
+        "<span style=\"color:var(--text-secondary);\">最新: <strong style=\"color:" + trendColor + ";\">$" + latest.toFixed(2) + "</strong></span>" +
+        "<span style=\"color:var(--text-secondary);\">平均: <strong>$" + avg.toFixed(2) + "</strong></span>" +
+        "<span style=\"color:var(--text-secondary);\">最低: <strong style=\"color:#5A8E6E;\">$" + min.toFixed(2) + "</strong></span>" +
+        "<span style=\"color:var(--text-secondary);\">最高: <strong style=\"color:#C45B4B;\">$" + max.toFixed(2) + "</strong></span>" +
+      "</div>" +
+      "<div style=\"font-size:18px;color:var(--accent);letter-spacing:1px;text-align:center;padding:8px;background:var(--bg-elevated);border-radius:8px;font-family:monospace;\">" + sparkline + "</div>" +
+    "</div>";
+  }).join("");
+}
+
+function openProductPriceChart(productName) {
+  currentPriceTrendProduct = productName;
+  const history = priceHistory[productName] || [];
+
+  if (history.length === 0) return;
+
+  const prices = history.map(function(h) { return h.price; });
+  const min = Math.min.apply(null, prices);
+  const max = Math.max.apply(null, prices);
+  const range = max - min || 1;
+
+  const width = 340;
+  const height = 200;
+  const padding = 30;
+  const chartW = width - padding * 2;
+  const chartH = height - padding * 2;
+
+  var pathD = "";
+  var points = "";
+  const stepX = chartW / (prices.length - 1 || 1);
+
+  prices.forEach(function(p, i) {
+    const x = padding + i * stepX;
+    const y = padding + chartH - ((p - min) / range * chartH);
+    if (i === 0) pathD += "M " + x + " " + y;
+    else pathD += " L " + x + " " + y;
+    points += "<circle cx=\"" + x + "\" cy=\"" + y + "\" r=\"4\" fill=\"#B8860B\" stroke=\"white\" stroke-width=\"2\"/>";
+    points += "<text x=\"" + x + "\" y=\"" + (y - 10) + "\" text-anchor=\"middle\" font-size=\"10\" fill=\"#2C2A26\" font-weight=\"600\">$" + p.toFixed(0) + "</text>";
+  });
+
+  var tableHtml = "<table style=\"width:100%;border-collapse:collapse;font-size:13px;margin-top:12px;\">";
+  tableHtml += "<thead><tr style=\"background:var(--bg-warm);\"><th style=\"padding:8px;text-align:left;border:1px solid var(--border);\">日期</th><th style=\"padding:8px;text-align:right;border:1px solid var(--border);\">價格</th><th style=\"padding:8px;text-align:right;border:1px solid var(--border);\">數量</th><th style=\"padding:8px;text-align:left;border:1px solid var(--border);\">位置</th></tr></thead><tbody>";
+  history.slice().reverse().forEach(function(h, i) {
+    tableHtml += "<tr style=\"background:" + (i % 2 === 0 ? "var(--bg-card)" : "var(--bg-elevated)") + ";\">";
+    tableHtml += "<td style=\"padding:8px;border:1px solid var(--border);\">" + h.date + "</td>";
+    tableHtml += "<td style=\"padding:8px;text-align:right;border:1px solid var(--border);font-weight:700;\">$" + h.price.toFixed(2) + "</td>";
+    tableHtml += "<td style=\"padding:8px;text-align:right;border:1px solid var(--border);\">" + h.qty + " " + escapeHtml(h.unit || "個") + "</td>";
+    tableHtml += "<td style=\"padding:8px;border:1px solid var(--border);\">" + escapeHtml(h.location || "") + (h.action === "out" ? " <span style=\"color:#C45B4B;font-size:11px;\">(出倉)</span>" : "") + "</td>";
+    tableHtml += "</tr>";
+  });
+  tableHtml += "</tbody></table>";
+
+  const modalHtml = "<div id=\"productPriceChartOverlay\" class=\"history-overlay show\" onclick=\"if(event.target===this)closeProductPriceChart()\">" +
+    "<div class=\"history-content\" style=\"max-height:92vh;max-width:420px;\">" +
+      "<div class=\"history-header\">" +
+        "<h3 class=\"history-title\">📈 " + escapeHtml(productName) + " 價格走勢</h3>" +
+        "<button class=\"modal-close\" onclick=\"closeProductPriceChart()\">×</button>" +
+      "</div>" +
+      "<div style=\"margin-bottom:16px;\">" +
+        "<svg width=\"" + width + "\" height=\"" + height + "\" style=\"background:var(--bg-elevated);border-radius:12px;border:1.5px solid var(--border);\">" +
+          "<defs><linearGradient id=\"priceGrad\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop offset=\"0%\" stop-color=\"rgba(184,134,11,0.2)\"/><stop offset=\"100%\" stop-color=\"rgba(184,134,11,0)\"/></linearGradient></defs>" +
+          "<path d=\"" + pathD + " L " + (padding + chartW) + " " + (padding + chartH) + " L " + padding + " " + (padding + chartH) + " Z\" fill=\"url(#priceGrad)\"/>" +
+          "<path d=\"" + pathD + "\" fill=\"none\" stroke=\"#B8860B\" stroke-width=\"2.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>" +
+          points +
+        "</svg>" +
+      "</div>" +
+      "<div style=\"display:flex;gap:12px;justify-content:center;margin-bottom:16px;font-size:12px;\">" +
+        "<span style=\"background:var(--success-soft);color:#5A8E6E;padding:4px 12px;border-radius:8px;font-weight:600;\">最低: $" + min.toFixed(2) + "</span>" +
+        "<span style=\"background:var(--danger-soft);color:#C45B4B;padding:4px 12px;border-radius:8px;font-weight:600;\">最高: $" + max.toFixed(2) + "</span>" +
+        "<span style=\"background:var(--accent-soft);color:#B8860B;padding:4px 12px;border-radius:8px;font-weight:600;\">平均: $" + (prices.reduce(function(a,b){return a+b;},0)/prices.length).toFixed(2) + "</span>" +
+      "</div>" +
+      tableHtml +
+    "</div>" +
+  "</div>";
+
+  var old = document.getElementById("productPriceChartOverlay");
+  if (old) old.remove();
+
+  document.body.insertAdjacentHTML("beforeend", modalHtml);
+}
+
+function closeProductPriceChart() {
+  var overlay = document.getElementById("productPriceChartOverlay");
+  if (overlay) overlay.remove();
 }
 
 // ========== 數據導出/導入 ==========
@@ -2101,42 +2234,45 @@ function confirmBarcodeAdd(barcode, name, category, image, quantity) {
   // 打開新增物品彈窗
   openAddModal();
 
-  // 填充資料
-  if (name) document.getElementById('itemName').value = name;
-  if (category) {
+  // 填充資料（處理 JSON.stringify 傳入的參數）
+  if (name && name !== "null") document.getElementById("itemName").value = name;
+  if (category && category !== "null") {
     selectedCategory = category;
     updateCategorySelection();
   }
-  if (image) {
+  if (image && image !== "null" && image !== "") {
     currentImageData = image;
-    const area = document.getElementById('imgUploadArea');
-    area.classList.add('has-img');
+    const area = document.getElementById("imgUploadArea");
+    area.classList.add("has-img");
     area.innerHTML = '<img src="' + image + '" alt="產品圖片"><button class="img-remove" onclick="event.stopPropagation();removeImage()">×</button>';
   }
 
   // 嘗試解析數量
-  if (quantity) {
+  if (quantity && quantity !== "null") {
     const qtyMatch = quantity.match(/(\d+)/);
     if (qtyMatch) {
-      document.getElementById('itemQty').value = qtyMatch[1];
+      document.getElementById("itemQty").value = qtyMatch[1];
     }
     const unitMatch = quantity.match(/\d+\s*(\w+)/);
     if (unitMatch) {
-      document.getElementById('itemUnit').value = unitMatch[1];
+      document.getElementById("itemUnit").value = unitMatch[1];
     }
   }
 
   // 嘗試從 Open Food Facts 獲取價格（目前資料庫不直接提供，留空讓用戶填寫）
-  document.getElementById('itemPrice').value = '';
+  document.getElementById("itemPrice").value = "";
 
   // 在備註中添加條碼資訊
-  const noteEl = document.getElementById('itemNote');
+  const noteEl = document.getElementById("itemNote");
   const existingNote = noteEl.value;
-  const barcodeNote = '條碼：' + barcode;
-  noteEl.value = existingNote ? existingNote + '\n' + barcodeNote : barcodeNote;
+  const barcodeNote = "條碼：" + (barcode || "");
+  noteEl.value = existingNote ? existingNote + "
+" + barcodeNote : barcodeNote;
 
-  showToast('📦 已帶入條碼資料，請確認後儲存');
+  showToast("📦 已帶入條碼資料，請確認後儲存");
 }
+
+
 // ========== PWA ==========
 function setupInstallPrompt() {
   window.addEventListener('beforeinstallprompt', (e) => {
