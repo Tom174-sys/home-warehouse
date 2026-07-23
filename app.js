@@ -122,6 +122,17 @@ function initFirebase() {
           if (data.actionHistory) actionHistory = data.actionHistory;
           else actionHistory = [];
 
+          // 向後兼容：為舊資料補上 priceHistory
+          items.forEach(item => {
+            if (!item.priceHistory && item.price !== null && item.price !== undefined) {
+              item.priceHistory = [{
+                price: item.price,
+                date: item.added || item.buyDate || getTodayHK(),
+                qty: item.qty || 1
+              }];
+            }
+          });
+
           saveToLocal();
         }
       } else {
@@ -283,6 +294,17 @@ function loadFromLocal() {
   if (itemSaved) { try { items = JSON.parse(itemSaved); } catch(e) {} }
   if (histSaved) { try { outHistory = JSON.parse(histSaved); } catch(e) {} }
   if (actionSaved) { try { actionHistory = JSON.parse(actionSaved); } catch(e) {} }
+
+  // 向後兼容：為舊資料補上 priceHistory
+  items.forEach(item => {
+    if (!item.priceHistory && item.price !== null && item.price !== undefined) {
+      item.priceHistory = [{
+        price: item.price,
+        date: item.added || item.buyDate || getTodayHK(),
+        qty: item.qty || 1
+      }];
+    }
+  });
 
   renderCategoryTabs();
   renderCategorySelects();
@@ -830,19 +852,40 @@ function saveItem() {
   const existingItem = isEditing ? items.find(i => i.id === editingId) : null;
 
   const priceVal = document.getElementById('itemPrice').value.trim();
+  const newPrice = priceVal ? parseFloat(priceVal) : null;
+
+  // 價格歷史記錄
+  let priceHistory = [];
+  if (existingItem && existingItem.priceHistory) {
+    priceHistory = [...existingItem.priceHistory];
+  }
+  // 如果價格有變化，記錄新價格
+  if (newPrice !== null && (!existingItem || existingItem.price !== newPrice)) {
+    priceHistory.push({
+      price: newPrice,
+      date: getTodayHK(),
+      qty: parseInt(document.getElementById('itemQty').value) || 1
+    });
+    // 最多保留 50 條記錄
+    if (priceHistory.length > 50) {
+      priceHistory = priceHistory.slice(-50);
+    }
+  }
+
   const item = {
     id: editingId || Date.now(),
     name: name,
     category: selectedCategory,
     qty: parseInt(document.getElementById('itemQty').value) || 1,
     unit: document.getElementById('itemUnit').value.trim() || '個',
-    price: priceVal ? parseFloat(priceVal) : null,
+    price: newPrice,
     location: document.getElementById('itemLocation').value.trim() || '未指定',
     buyDate: document.getElementById('itemBuyDate').value,
     expiry: document.getElementById('itemExpiry').value,
     note: document.getElementById('itemNote').value.trim(),
     image: currentImageData || (existingItem ? existingItem.image || '' : ''),
-    added: existingItem ? existingItem.added || getTodayHK() : getTodayHK()
+    added: existingItem ? existingItem.added || getTodayHK() : getTodayHK(),
+    priceHistory: priceHistory
   };
 
   if (isEditing) {
@@ -942,6 +985,92 @@ function openDetail(id) {
   }
 
   document.getElementById('detailNote').textContent = item.note || '暫無備註';
+
+  // 價格歷史顯示
+  const priceHistoryEl = document.getElementById('detailPriceHistory');
+  if (item.priceHistory && item.priceHistory.length > 0) {
+    let phHtml = '<div style="margin-top:16px;">';
+    phHtml += '<div style="font-size:13px;font-weight:700;color:var(--text-secondary);margin-bottom:10px;">📈 價格變動歷史</div>';
+    phHtml += '<div style="display:flex;flex-direction:column;gap:6px;">';
+
+    // 計算平均價格和趨勢
+    const prices = item.priceHistory.map(h => h.price);
+    const avgPrice = prices.reduce((a,b) => a+b, 0) / prices.length;
+    const minPrice = Math.min(...prices);
+    const maxPrice = Math.max(...prices);
+    const latestPrice = prices[prices.length - 1];
+    const prevPrice = prices.length > 1 ? prices[prices.length - 2] : latestPrice;
+    const trend = latestPrice > prevPrice ? '📈' : latestPrice < prevPrice ? '📉' : '➡️';
+    const trendColor = latestPrice > prevPrice ? '#C45B4B' : latestPrice < prevPrice ? '#5A8E6E' : '#A39E98';
+
+    phHtml += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;font-size:12px;color:var(--text-muted);">';
+    phHtml += '<span>平均: <strong style="color:var(--text-primary);">$' + avgPrice.toFixed(2) + '</strong></span>';
+    phHtml += '<span>最低: <strong style="color:#5A8E6E;">$' + minPrice.toFixed(2) + '</strong></span>';
+    phHtml += '<span>最高: <strong style="color:#C45B4B;">$' + maxPrice.toFixed(2) + '</strong></span>';
+    phHtml += '<span>趨勢: <strong style="color:' + trendColor + ';">' + trend + '</strong></span>';
+    phHtml += '</div>';
+
+    // 價格走勢圖（簡易條形圖）
+    const maxBarPrice = Math.max(...prices) * 1.1;
+    phHtml += '<div style="display:flex;align-items:flex-end;gap:3px;height:60px;padding:8px;background:var(--bg-elevated);border-radius:10px;border:1.5px solid var(--border);margin-bottom:8px;">';
+    item.priceHistory.forEach((h, idx) => {
+      const barHeight = maxBarPrice > 0 ? (h.price / maxBarPrice * 50) : 5;
+      const isLatest = idx === item.priceHistory.length - 1;
+      const barColor = isLatest ? 'linear-gradient(to top, #B8860B, #C45B4B)' : '#D4C4A8';
+      phHtml += '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:28px;">';
+      phHtml += '<div style="font-size:9px;color:var(--text-muted);white-space:nowrap;">' + h.date.slice(5) + '</div>';
+      phHtml += '<div style="width:100%;height:' + barHeight + 'px;background:' + barColor + ';border-radius:3px ' + (isLatest ? '3px 3px 3px' : '3px 3px 0 0') + ';position:relative;" title="$' + h.price.toFixed(2) + ' (' + h.qty + ' ' + item.unit + ')">';
+      if (isLatest) {
+        phHtml += '<div style="position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:10px;font-weight:700;color:#B8860B;white-space:nowrap;">$' + h.price.toFixed(0) + '</div>';
+      }
+      phHtml += '</div>';
+      phHtml += '</div>';
+    });
+    phHtml += '</div>';
+
+    // 歷史記錄列表
+    phHtml += '<div style="max-height:120px;overflow-y:auto;">';
+    [...item.priceHistory].reverse().forEach((h, idx) => {
+      const prev = item.priceHistory[item.priceHistory.length - idx - 2];
+      let changeStr = '';
+      let changeColor = '';
+      if (prev) {
+        const diff = h.price - prev.price;
+        const pct = ((diff / prev.price) * 100).toFixed(1);
+        if (diff > 0) {
+          changeStr = ' 漲 ' + pct + '%';
+          changeColor = '#C45B4B';
+        } else if (diff < 0) {
+          changeStr = ' 跌 ' + Math.abs(pct) + '%';
+          changeColor = '#5A8E6E';
+        } else {
+          changeStr = ' 持平';
+          changeColor = '#A39E98';
+        }
+      }
+      phHtml += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:' + (idx === 0 ? 'var(--accent-soft)' : 'var(--bg-elevated)') + ';border-radius:8px;margin-bottom:4px;border:1.5px solid ' + (idx === 0 ? 'var(--accent-light)' : 'var(--border)') + ';">';
+      phHtml += '<div style="display:flex;align-items:center;gap:8px;">';
+      phHtml += '<span style="font-size:11px;color:var(--text-muted);">' + h.date + '</span>';
+      phHtml += '<span style="font-size:12px;color:var(--text-secondary);">' + h.qty + ' ' + escapeHtml(item.unit) + '</span>';
+      phHtml += '</div>';
+      phHtml += '<div style="display:flex;align-items:center;gap:6px;">';
+      phHtml += '<span style="font-size:14px;font-weight:700;color:var(--text-primary);">$' + h.price.toFixed(2) + '</span>';
+      if (changeStr) {
+        phHtml += '<span style="font-size:11px;font-weight:600;color:' + changeColor + ';background:' + changeColor + '15;padding:2px 6px;border-radius:6px;">' + changeStr + '</span>';
+      }
+      phHtml += '</div>';
+      phHtml += '</div>';
+    });
+    phHtml += '</div>';
+
+    phHtml += '</div></div>';
+    priceHistoryEl.innerHTML = phHtml;
+    priceHistoryEl.style.display = 'block';
+  } else {
+    priceHistoryEl.innerHTML = '';
+    priceHistoryEl.style.display = 'none';
+  }
+
   document.getElementById('detailModal').classList.add('show');
 }
 
@@ -1395,6 +1524,81 @@ function showCalendarDayDetail(day, actions) {
 
 
 
+
+
+// ========== 價格趨勢分析 ==========
+function openPriceTrendModal() {
+  renderPriceTrend();
+  document.getElementById('priceTrendModal').classList.add('show');
+}
+
+function closePriceTrendModal() {
+  document.getElementById('priceTrendModal').classList.remove('show');
+}
+
+function renderPriceTrend() {
+  const list = document.getElementById('priceTrendList');
+  const empty = document.getElementById('priceTrendEmpty');
+
+  // 收集所有有價格歷史的物品
+  const itemsWithHistory = items.filter(i => i.priceHistory && i.priceHistory.length > 1);
+
+  if (itemsWithHistory.length === 0) {
+    list.innerHTML = '';
+    empty.style.display = 'block';
+    document.getElementById('priceTrendCount').textContent = '0 件物品有價格記錄';
+    return;
+  }
+
+  empty.style.display = 'none';
+  document.getElementById('priceTrendCount').textContent = itemsWithHistory.length + ' 件物品有價格記錄';
+
+  list.innerHTML = itemsWithHistory.map(item => {
+    const cfg = categories[item.category] || categories.other;
+    const prices = item.priceHistory.map(h => h.price);
+    const avg = prices.reduce((a,b) => a+b, 0) / prices.length;
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    const latest = prices[prices.length - 1];
+    const first = prices[0];
+    const totalChange = ((latest - first) / first * 100).toFixed(1);
+    const trendIcon = totalChange > 0 ? '📈' : totalChange < 0 ? '📉' : '➡️';
+    const trendColor = totalChange > 0 ? '#C45B4B' : totalChange < 0 ? '#5A8E6E' : '#A39E98';
+
+    // 簡易走勢線 (用 Unicode 字符)
+    let sparkline = '';
+    const normalized = prices.map(p => (p - min) / (max - min || 1));
+    const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    normalized.forEach(n => {
+      sparkline += chars[Math.min(Math.floor(n * 7), 7)];
+    });
+
+    return '<div class="price-trend-item" style="background:var(--bg-card);border-radius:var(--radius-md);padding:16px;margin-bottom:12px;border:1.5px solid var(--border);">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
+        '<div style="display:flex;align-items:center;gap:10px;">' +
+          '<span style="font-size:24px;">' + cfg.icon + '</span>' +
+          '<div>' +
+            '<div style="font-size:16px;font-weight:700;color:var(--text-primary);">' + escapeHtml(item.name) + '</div>' +
+            '<div style="font-size:12px;color:var(--text-muted);">' + item.priceHistory.length + ' 次價格記錄</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="text-align:right;">' +
+          '<div style="font-size:20px;font-weight:800;color:' + trendColor + ';">' + trendIcon + ' ' + (totalChange > 0 ? '+' : '') + totalChange + '%</div>' +
+          '<div style="font-size:12px;color:var(--text-muted);">總變動</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:16px;margin-bottom:10px;font-size:12px;">' +
+        '<span style="color:var(--text-secondary);">首次: <strong>$' + first.toFixed(2) + '</strong></span>' +
+        '<span style="color:var(--text-secondary);">最新: <strong style="color:' + trendColor + ';">$' + latest.toFixed(2) + '</strong></span>' +
+        '<span style="color:var(--text-secondary);">平均: <strong>$' + avg.toFixed(2) + '</strong></span>' +
+        '<span style="color:var(--text-secondary);">最低: <strong style="color:#5A8E6E;">$' + min.toFixed(2) + '</strong></span>' +
+        '<span style="color:var(--text-secondary);">最高: <strong style="color:#C45B4B;">$' + max.toFixed(2) + '</strong></span>' +
+      '</div>' +
+      '<div style="font-size:18px;color:var(--accent);letter-spacing:1px;text-align:center;padding:8px;background:var(--bg-elevated);border-radius:8px;font-family:monospace;">' + sparkline + '</div>' +
+    '</div>';
+  }).join('');
+}
+
 // ========== 數據導出/導入 ==========
 function exportData() {
   const data = {
@@ -1805,7 +2009,7 @@ async function lookupAndFill(barcode) {
     html += '</div></div>';
 
     html += '<div style="display:flex;gap:10px;margin-top:16px">';
-    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAdd(\'' + barcode + '\', \'' + escapeHtml(data.name).replace(/'/g, "\'") + '\', \'' + data.category + '\', \'' + (data.image || '') + '\', \'' + escapeHtml(data.quantity || '').replace(/'/g, "\'") + '\')">✅ 確認入倉</button>';
+    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAdd(' + JSON.stringify(barcode) + ', ' + JSON.stringify(data.name || '') + ', ' + JSON.stringify(data.category || '') + ', ' + JSON.stringify(data.image || '') + ', ' + JSON.stringify(data.quantity || '') + ')">✅ 確認入倉</button>';
     html += '<button class="btn" style="flex:1" onclick="retryBarcodeScan()">🔄 重新掃描</button>';
     html += '</div>';
 
@@ -1833,7 +2037,7 @@ async function lookupAndFill(barcode) {
     html += '</div>';
 
     html += '<div style="display:flex;gap:10px">';
-    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAddWithName(\'' + barcode + '\')">➕ 入倉</button>';
+    html += '<button class="btn btn-primary" style="flex:1" onclick="confirmBarcodeAddWithName(' + JSON.stringify(barcode) + ')">➕ 入倉</button>';
     html += '<button class="btn" style="flex:1" onclick="retryBarcodeScan()">🔄 重新掃描</button>';
     html += '</div></div>';
 

@@ -593,6 +593,7 @@
         </div>
 
         <div id="detailNote" class="detail-note"></div>
+        <div id="detailPriceHistory" style="display:none;"></div>
 
         <div class="detail-actions">
           <button class="btn" style="color:var(--accent)" onclick="editItem()">✏️ 編輯</button>
@@ -760,7 +761,28 @@
     </div>
   </div>
 
-  <div id="settingsModal" class="settings-overlay" onclick="if(event.target===this)closeSettings()">
+    <!-- 價格趨勢分析彈窗 -->
+  <div id="priceTrendModal" class="history-overlay" onclick="if(event.target===this)closePriceTrendModal()">
+    <div class="history-content" style="max-height:92vh;">
+      <div class="history-header">
+        <h3 class="history-title">📈 價格趨勢分析</h3>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="modal-close" onclick="closePriceTrendModal()">×</button>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:0 4px;">
+        <span id="priceTrendCount" style="font-size:13px;color:var(--text-secondary);font-weight:500;">0 件物品有價格記錄</span>
+      </div>
+      <div id="priceTrendList" class="history-list"></div>
+      <div id="priceTrendEmpty" class="history-empty" style="display:none">
+        <div class="history-empty-icon">📈</div>
+        <div class="history-empty-text">暫無價格變動記錄</div>
+        <div style="font-size:13px;color:var(--text-muted);margin-top:8px;">編輯物品價格時會自動記錄價格變化</div>
+      </div>
+    </div>
+  </div>
+
+<div id="settingsModal" class="settings-overlay" onclick="if(event.target===this)closeSettings()">
     <div class="settings-card">
       <div class="settings-title">⚙️ 設定</div>
       <div class="settings-row">
@@ -782,6 +804,10 @@
       <div class="settings-row">
         <span class="settings-label">操作歷史</span>
         <button class="settings-btn" onclick="closeSettings();openActionHistoryModal()">查看</button>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">價格趨勢</span>
+        <button class="settings-btn" onclick="closeSettings();openPriceTrendModal()">📈 查看</button>
       </div>
       <div class="settings-row">
         <span class="settings-label">日曆模式</span>
@@ -839,17 +865,8 @@
   </div>
 
 
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-database-compat.js"></script>
   <script src="app.js"></script>
-
-  <script>
-    window.addEventListener('error', function(e) {
-      console.error('全局錯誤:', e.message, 'at', e.filename, 'line', e.lineno);
-    });
-    window.addEventListener('unhandledrejection', function(e) {
-      console.error('未處理的 Promise 錯誤:', e.reason);
-    });
-  </script>
 </body>
 </html>
